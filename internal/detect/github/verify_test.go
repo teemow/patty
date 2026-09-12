@@ -1,10 +1,12 @@
-package detect
+package github
 
 import (
 	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/teemow/patty/internal/detect"
 )
 
 func TestVerify(t *testing.T) {
@@ -31,32 +33,32 @@ func TestVerify(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	v := &Verifier{BaseURL: srv.URL, Client: srv.Client()}
+	p := &Provider{BaseURL: srv.URL, Client: srv.Client()}
 	ctx := context.Background()
 
-	if got := v.Verify(ctx, Token{Kind: KindPAT, Value: "live"}); got.Status != StatusActive || got.Detail != "user patty, scopes: repo, read:org" {
+	if got := p.Verify(ctx, detect.Token{Kind: KindPAT, Value: "live"}); got.Status != detect.StatusActive || got.Detail != "user patty, scopes: repo, read:org" {
 		t.Fatalf("live: %+v", got)
 	}
-	got := v.Verify(ctx, Token{Kind: KindOAuth, Value: "cli"})
-	if got.Status != StatusActive || got.ClientID != "178c6fc778ccc68e1d6a" || got.App != "GitHub CLI" || got.Issuer() != "GitHub CLI" || got.Expires != "2026-10-01" {
+	got := p.Verify(ctx, detect.Token{Kind: KindOAuth, Value: "cli"})
+	if got.Status != detect.StatusActive || got.ClientID != "178c6fc778ccc68e1d6a" || got.App != "GitHub CLI" || got.Issuer() != "GitHub CLI" || got.Expires != "2026-10-01" {
 		t.Fatalf("cli: %+v", got)
 	}
-	if got := v.Verify(ctx, Token{Kind: KindOAuth, Value: "custom"}); got.App != "" || got.Issuer() != "OAuth app Iv1.unknown" || got.Expires != "" {
+	if got := p.Verify(ctx, detect.Token{Kind: KindOAuth, Value: "custom"}); got.App != "" || got.Issuer() != "OAuth app Iv1.unknown" || got.Expires != "" {
 		t.Fatalf("custom: %+v", got)
 	}
-	if got := v.Verify(ctx, Token{Kind: KindPAT, Value: "live"}); got.Issuer() != "" {
+	if got := p.Verify(ctx, detect.Token{Kind: KindPAT, Value: "live"}); got.Issuer() != "" {
 		t.Fatalf("pat has no issuer: %+v", got)
 	}
-	if got := v.Verify(ctx, Token{Kind: KindServerToServer, Value: "app"}); got.Status != StatusActive || got.Detail != "installation token with access to 3 repositories" {
+	if got := p.Verify(ctx, detect.Token{Kind: KindServerToServer, Value: "app"}); got.Status != detect.StatusActive || got.Detail != "installation token with access to 3 repositories" {
 		t.Fatalf("app: %+v", got)
 	}
-	if got := v.Verify(ctx, Token{Kind: KindOAuth, Value: "dead"}); got.Status != StatusRevoked {
+	if got := p.Verify(ctx, detect.Token{Kind: KindOAuth, Value: "dead"}); got.Status != detect.StatusRevoked {
 		t.Fatalf("dead: %+v", got)
 	}
-	if got := v.Verify(ctx, Token{Kind: KindFineGrained, Value: "flaky"}); got.Status != StatusUnknown {
+	if got := p.Verify(ctx, detect.Token{Kind: KindFineGrained, Value: "flaky"}); got.Status != detect.StatusUnknown {
 		t.Fatalf("flaky: %+v", got)
 	}
-	if got := v.Verify(ctx, Token{Kind: KindRefresh, Value: "r"}); got.Status != StatusUnverifiable {
+	if got := p.Verify(ctx, detect.Token{Kind: KindRefresh, Value: "r"}); got.Status != detect.StatusUnverifiable {
 		t.Fatalf("refresh: %+v", got)
 	}
 }

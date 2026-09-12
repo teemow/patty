@@ -14,7 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/teemow/patty/internal/detect"
+	"github.com/teemow/patty/internal/detect/providers"
 	"github.com/teemow/patty/internal/disk"
 	"github.com/teemow/patty/internal/github"
 	"github.com/teemow/patty/internal/gitrepo"
@@ -32,6 +32,9 @@ const (
 )
 
 var version = "dev"
+
+// registry holds every credential provider patty knows.
+var registry = providers.Default()
 
 // SetVersion records the build version for `patty version`.
 func SetVersion(v string) {
@@ -65,7 +68,7 @@ var opts flags
 
 var rootCmd = &cobra.Command{
 	Use:   "patty [target...]",
-	Short: "Finds leaked GitHub tokens in every corner of a repository's history",
+	Short: "Finds leaked GitHub and Slack tokens in every corner of a repository's history",
 	Long: `Patty checks the credentials in your git history -- all of it.
 
 A target is a local repository path, an owner/repo, a github.com URL, or a
@@ -74,15 +77,16 @@ bare owner (user or organization) to scan every repository of.
 GitHub repositories are mirrored into a size-capped cache (all branches,
 tags and pull request refs), extended with commits the repository activity
 feed reports as force-pushed away or deleted, and every object in the
-database is scanned -- reachable or not. Classic tokens are verified
-offline against their built-in checksum; --verify asks GitHub whether a
-token is still live, and --revoke asks GitHub to revoke the live ones.
+database is scanned -- reachable or not. patty looks for GitHub tokens and
+Slack tokens and webhooks. Classic GitHub tokens are verified offline
+against their built-in checksum; --verify asks each provider whether a
+credential is still live, and --revoke asks it to revoke the live ones.
 
-Every token comes with advice: where its owner revokes it, whether it is
-still configured on this machine, and what its history needs.
+Every credential comes with advice: where its owner revokes it, whether it
+is still configured on this machine, and what its history needs.
 
-Exit code 0 means nothing was found, 1 that tokens were found, 2 that a
-target failed or was skipped and nothing was found.`,
+Exit code 0 means nothing was found, 1 that credentials were found, 2 that
+a target failed or was skipped and nothing was found.`,
 	Args:          cobra.ArbitraryArgs,
 	SilenceUsage:  true,
 	SilenceErrors: true,
@@ -91,8 +95,8 @@ target failed or was skipped and nothing was found.`,
 
 func init() {
 	f := rootCmd.Flags()
-	f.BoolVar(&opts.verify, "verify", false, "Check each token against the GitHub API to tell active tokens from revoked ones")
-	f.BoolVar(&opts.revoke, "revoke", false, "Ask GitHub to revoke every active token found (implies --verify; asks for confirmation)")
+	f.BoolVar(&opts.verify, "verify", false, "Check each credential against its provider's API to tell active ones from revoked ones")
+	f.BoolVar(&opts.revoke, "revoke", false, "Ask the provider to revoke every active credential found (implies --verify; asks for confirmation)")
 	f.BoolVarP(&opts.yes, "yes", "y", false, "Revoke without asking for confirmation")
 	f.BoolVar(&opts.jsonOut, "json", false, "Print results as JSON")
 	f.BoolVar(&opts.showSecrets, "show-secrets", false, "Print full token values instead of redacted ones")
@@ -108,7 +112,7 @@ func init() {
 	f.IntVar(&opts.activityPages, "activity-pages", 10, "Activity feed pages (100 events each) to read per repository and event type")
 	f.BoolVar(&opts.includeForks, "include-forks", false, "Include forks when expanding an owner")
 	f.BoolVar(&opts.includeArchived, "include-archived", true, "Include archived repositories when expanding an owner")
-	f.StringSliceVar(&opts.ignore, "ignore", nil, "Token fingerprints to leave out of the report (comma-separated)")
+	f.StringSliceVar(&opts.ignore, "ignore", nil, "Credential fingerprints to leave out of the report (comma-separated)")
 	f.BoolVarP(&opts.verbose, "verbose", "v", false, "Print progress for each phase")
 }
 
@@ -144,7 +148,7 @@ func run(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	stderr := cmd.ErrOrStderr()
 	colors := isTerminal(os.Stdout) && os.Getenv("NO_COLOR") == ""
-	ropts := report.Options{Color: colors, ShowSecrets: opts.showSecrets, AllRefs: opts.allRefs}
+	ropts := report.Options{Color: colors, ShowSecrets: opts.showSecrets, AllRefs: opts.allRefs, Providers: registry}
 	if opts.revoke {
 		opts.verify = true
 	}
@@ -192,12 +196,8 @@ func run(cmd *cobra.Command, args []string) error {
 	for _, fp := range opts.ignore {
 		ignore[strings.TrimSpace(fp)] = true
 	}
-	var verifier *detect.Verifier
-	if opts.verify {
-		verifier = detect.NewVerifier()
-	}
 	runOpts := scan.RunOptions{
-		Options:       scan.Options{Workers: opts.workers, MaxObject: maxObject, Ignore: ignore, Verifier: verifier},
+		Options:       scan.Options{Workers: opts.workers, MaxObject: maxObject, Ignore: ignore, Providers: registry, Verify: opts.verify},
 		Cache:         cache,
 		Keep:          opts.keep,
 		Auth:          auth,
@@ -214,10 +214,10 @@ func run(cmd *cobra.Command, args []string) error {
 		_, _ = fmt.Fprintln(stderr, report.StatusLine(r, ropts))
 	})
 	if scan.Summarize(results).Tokens > 0 {
-		scan.AnnotateLocal(results, localcreds.Match(localcreds.Find(ctx)))
+		scan.AnnotateLocal(results, localcreds.Match(localcreds.Find(ctx, registry)))
 	}
 	if opts.revoke && ctx.Err() == nil {
-		if err := revokeActive(cmd, results, verifier); err != nil {
+		if err := revokeActive(cmd, results); err != nil {
 			return err
 		}
 	}

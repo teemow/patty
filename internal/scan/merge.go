@@ -1,8 +1,8 @@
 package scan
 
-// Merge groups the findings of all results by token, so a token that leaked
-// into several repositories is one entry with every location. Active tokens
-// come first.
+// Merge groups the findings of all results by credential, so one that
+// leaked into several repositories is one entry with every location. Active
+// credentials come first.
 func Merge(results []Result) []Finding {
 	byFP := map[string]*Finding{}
 	var order []string
@@ -38,8 +38,8 @@ func Merge(results []Result) []Finding {
 	return out
 }
 
-// AnnotateLocal marks every finding whose token is also configured on this
-// machine, given the sources per fingerprint.
+// AnnotateLocal marks every finding whose credential is also configured on
+// this machine, given the sources per fingerprint.
 func AnnotateLocal(results []Result, local map[string][]string) {
 	for i := range results {
 		for j := range results[i].Findings {

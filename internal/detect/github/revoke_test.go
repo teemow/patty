@@ -1,4 +1,4 @@
-package detect
+package github
 
 import (
 	"context"
@@ -33,39 +33,23 @@ func TestRevoke(t *testing.T) {
 		w.WriteHeader(http.StatusAccepted)
 	}))
 	defer srv.Close()
-	rv := &Revoker{BaseURL: srv.URL, Client: srv.Client()}
+	p := &Provider{BaseURL: srv.URL, Client: srv.Client()}
 	ctx := context.Background()
 
 	tokens := make([]string, revokeBatch+2)
 	for i := range tokens {
 		tokens[i] = fmt.Sprintf("t%d", i)
 	}
-	if err := rv.Revoke(ctx, tokens); err != nil {
+	if err := p.Revoke(ctx, tokens); err != nil {
 		t.Fatal(err)
 	}
 	if len(batches) != 2 || len(batches[0]) != revokeBatch || len(batches[1]) != 2 || batches[1][1] != tokens[revokeBatch+1] {
 		t.Fatalf("batches: %d", len(batches))
 	}
-	if err := rv.Revoke(ctx, nil); err != nil || len(batches) != 2 {
+	if err := p.Revoke(ctx, nil); err != nil || len(batches) != 2 {
 		t.Fatalf("empty list must not call the API: %v", err)
 	}
-	if err := rv.Revoke(ctx, []string{"spam"}); err == nil || err.Error() != "revocation refused: HTTP 422: Validation Failed" {
+	if err := p.Revoke(ctx, []string{"spam"}); err == nil || err.Error() != "revocation refused: HTTP 422: Validation Failed" {
 		t.Fatalf("refused: %v", err)
-	}
-}
-
-func TestRevocableAndRevokePage(t *testing.T) {
-	for kind, want := range map[Kind]bool{KindPAT: true, KindFineGrained: true, KindOAuth: true, KindUserToServer: true, KindRefresh: true, KindServerToServer: false, Kind("x"): false} {
-		if Revocable(kind) != want {
-			t.Errorf("Revocable(%s) = %v", kind, !want)
-		}
-	}
-	for _, kind := range []Kind{KindPAT, KindFineGrained, KindOAuth, KindUserToServer, KindRefresh, KindServerToServer} {
-		if RevokePage(kind) == "" {
-			t.Errorf("no revoke page for %s", kind)
-		}
-	}
-	if RevokePage(Kind("x")) != "" {
-		t.Error("unknown kind has no page")
 	}
 }

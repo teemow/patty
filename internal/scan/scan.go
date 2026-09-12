@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/teemow/patty/internal/detect"
+	"github.com/teemow/patty/internal/detect/providers"
 	"github.com/teemow/patty/internal/gitrepo"
 )
 
@@ -22,8 +23,18 @@ type Options struct {
 	MaxObject int64
 	// Ignore holds token fingerprints to leave out of the results.
 	Ignore map[string]bool
-	// Verifier, when set, checks each token against the GitHub API.
-	Verifier *detect.Verifier
+	// Providers is the set of credential providers to look for; nil means
+	// every provider patty ships with.
+	Providers *detect.Registry
+	// Verify checks each credential found against its provider's API.
+	Verify bool
+}
+
+func (o Options) providers() *detect.Registry {
+	if o.Providers != nil {
+		return o.Providers
+	}
+	return providers.Default()
 }
 
 func (o Options) workers() int {
@@ -56,15 +67,20 @@ type Location struct {
 	Rewrite string `json:"rewrite,omitempty"`
 }
 
-// Finding is one distinct token and everywhere it appears.
+// Finding is one distinct credential and everywhere it appears.
 type Finding struct {
-	Kind             detect.Kind          `json:"kind"`
-	Fingerprint      string               `json:"fingerprint"`
-	Token            string               `json:"-"`
-	Redacted         string               `json:"token"`
-	ChecksumVerified bool                 `json:"checksum_verified"`
-	Verification     *detect.Verification `json:"verification,omitempty"`
-	// Revocation records what happened when patty asked GitHub to revoke the token.
+	// Provider names the issuer of the credential: GitHub, Slack.
+	Provider         string      `json:"provider"`
+	Kind             detect.Kind `json:"kind"`
+	Fingerprint      string      `json:"fingerprint"`
+	Token            string      `json:"-"`
+	Redacted         string      `json:"token"`
+	ChecksumVerified bool        `json:"checksum_verified"`
+	// Attribution is what the credential's own shape says about its owner,
+	// such as the workspace id in a Slack token; known without --verify.
+	Attribution  string               `json:"attribution,omitempty"`
+	Verification *detect.Verification `json:"verification,omitempty"`
+	// Revocation records what happened when patty asked the provider to revoke the credential.
 	Revocation Revocation `json:"revocation,omitempty"`
 	// Local lists where the same token is configured on this machine.
 	Local     []string   `json:"local,omitempty"`
@@ -73,12 +89,12 @@ type Finding struct {
 	Occurrences int `json:"occurrences"`
 }
 
-// Active reports whether GitHub confirmed the token as live.
+// Active reports whether the provider confirmed the credential as live.
 func (f Finding) Active() bool {
 	return f.Verification != nil && f.Verification.Status == detect.StatusActive
 }
 
-// Revoked reports whether GitHub confirmed the token as dead.
+// Revoked reports whether the provider confirmed the credential as dead.
 func (f Finding) Revoked() bool {
 	return f.Verification != nil && f.Verification.Status == detect.StatusRevoked
 }
@@ -148,19 +164,20 @@ func Repo(ctx context.Context, name string, repo *gitrepo.Repo, rewrites []Rewri
 		bytes    int64
 		findings = map[string]*Finding{}
 		hits     = map[string]map[hit]bool{} // token value -> distinct locations
+		registry = opts.providers()
 	)
 	err = parallel(ctx, shas, opts.workers(), func(shard []string) error {
 		var local int64
 		err := repo.ReadObjects(ctx, shard, func(obj gitrepo.Object, content []byte) error {
 			local += obj.Size
-			for _, tok := range detect.Find(content) {
+			for _, tok := range registry.Find(content) {
 				if opts.Ignore[tok.Fingerprint()] {
 					continue
 				}
 				mu.Lock()
 				f := findings[tok.Value]
 				if f == nil {
-					f = &Finding{Kind: tok.Kind, Fingerprint: tok.Fingerprint(), Token: tok.Value, Redacted: detect.Redact(tok.Value), ChecksumVerified: tok.ChecksumVerified}
+					f = NewFinding(registry, tok)
 					findings[tok.Value] = f
 					hits[tok.Value] = map[hit]bool{}
 				}
@@ -187,8 +204,8 @@ func Repo(ctx context.Context, name string, repo *gitrepo.Repo, rewrites []Rewri
 		}
 	}
 	for _, f := range findings {
-		if opts.Verifier != nil {
-			v := opts.Verifier.Verify(ctx, detect.Token{Kind: f.Kind, Value: f.Token})
+		if opts.Verify {
+			v := registry.Verify(ctx, f.token())
 			f.Verification = &v
 		}
 		res.Findings = append(res.Findings, *f)
@@ -198,7 +215,26 @@ func Repo(ctx context.Context, name string, repo *gitrepo.Repo, rewrites []Rewri
 	return res, nil
 }
 
-// SortFindings orders active tokens first, then by kind and fingerprint.
+// NewFinding starts the finding for a credential: provider, kind,
+// fingerprint and redacted value, with no locations yet.
+func NewFinding(registry *detect.Registry, tok detect.Token) *Finding {
+	return &Finding{
+		Provider:         registry.ProviderName(tok.Kind),
+		Kind:             tok.Kind,
+		Fingerprint:      tok.Fingerprint(),
+		Token:            tok.Value,
+		Redacted:         detect.Redact(tok.Value),
+		ChecksumVerified: tok.ChecksumVerified,
+		Attribution:      tok.Attribution,
+	}
+}
+
+// token rebuilds the detect.Token a finding stands for.
+func (f Finding) token() detect.Token {
+	return detect.Token{Kind: f.Kind, Value: f.Token}
+}
+
+// SortFindings orders active credentials first, then by kind and fingerprint.
 func SortFindings(fs []Finding) {
 	sort.Slice(fs, func(i, j int) bool {
 		if a, b := rank(fs[i]), rank(fs[j]); a != b {
