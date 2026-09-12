@@ -23,10 +23,10 @@ type Provider interface {
 	// Only the provider's explicit invalid-credentials answer is reported as
 	// revoked; anything else that is not a clean acceptance is unknown.
 	Verify(ctx context.Context, tok Token) Verification
-	// Revoke asks the provider to revoke the given credential values. A nil
-	// error means every request was accepted; the caller confirms the
-	// outcome with Verify.
-	Revoke(ctx context.Context, tokens []string) error
+	// Revoke asks the provider to revoke the given credentials. A nil error
+	// means every request was accepted; the caller confirms the outcome with
+	// Verify.
+	Revoke(ctx context.Context, tokens []Token) error
 	// LocalSources lists where tools keep this provider's credentials on a
 	// developer machine.
 	LocalSources() LocalSources
@@ -37,7 +37,7 @@ type Provider interface {
 // anything. patty uses it to preview a revocation before asking for
 // confirmation.
 type DryRunRevoker interface {
-	DryRunRevoke(ctx context.Context, token string) error
+	DryRunRevoke(ctx context.Context, tok Token) error
 }
 
 // KindInfo describes one credential family.
@@ -55,6 +55,10 @@ type KindInfo struct {
 	// RevokeEffect names a side effect of revoking through the API that is
 	// easy to miss. The placeholder {app} stands for the issuing application.
 	RevokeEffect string
+	// AuditNote says how to find out whether a leaked credential of this kind
+	// was used while it was exposed, and what the provider does on its own
+	// when it spots the leak. Shown for every finding, revoked or not.
+	AuditNote string
 }
 
 // LocalSources names where a provider's credentials are configured on the

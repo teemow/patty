@@ -3,6 +3,7 @@ package providers
 
 import (
 	"github.com/teemow/patty/internal/detect"
+	"github.com/teemow/patty/internal/detect/aws"
 	"github.com/teemow/patty/internal/detect/github"
 	"github.com/teemow/patty/internal/detect/slack"
 )
@@ -10,5 +11,5 @@ import (
 // Default returns a registry of every provider against its public API, in
 // report order.
 func Default() *detect.Registry {
-	return detect.NewRegistry(github.New(), slack.New())
+	return detect.NewRegistry(github.New(), slack.New(), aws.New())
 }

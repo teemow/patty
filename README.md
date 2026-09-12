@@ -7,7 +7,7 @@
 </p>
 <h1 align="center">patty</h1>
 <p align="center">
-  Finds leaked GitHub and Slack tokens in every corner of a repository's history.<br>
+  Finds leaked GitHub, Slack and AWS credentials in every corner of a repository's history.<br>
   Marge's sister. Works at the DMV. Checks everyone's credentials.
 </p>
 
@@ -56,7 +56,7 @@ A target is a local path, `owner/repo`, a github.com URL, or a bare `owner` (use
 
 `patty --help` lists every flag. The ones you will reach for:
 
-- `--verify` -- ask GitHub and Slack which tokens are still **active**; `--revoke` then revokes those, after asking (`--yes` skips the question)
+- `--verify` -- ask GitHub, Slack and AWS which credentials are still **active**; `--revoke` then revokes those, after asking (`--yes` skips the question)
 - `--ignore fp,fp` -- leave tokens you have already dealt with out of the report, by [fingerprint](docs/report.md#fingerprints)
 - `--keep` -- keep mirrors in the cache so a re-run only fetches what changed; `--max-disk` and `--min-free` cap what the cache may use
 - `--include-forks` -- include forks when expanding an owner
@@ -88,7 +88,7 @@ Each token is listed once with every place it was found, the oldest commit that 
 
 1. **Mirror, not clone.** `git clone --mirror` brings every ref GitHub advertises, including `refs/pull/*` and so the history of every pull request.
 2. **Fetch what was rewritten.** The repository activity feed names the commits that were force-pushed away or deleted; GitHub still serves them by SHA, so patty fetches them too.
-3. **Scan objects, not diffs.** Every blob, commit and tag in the object database is read exactly once, reachable or not, and checked for GitHub tokens and Slack tokens and webhooks. Classic GitHub tokens are confirmed against their built-in checksum, so a `ghp_` lookalike in a test fixture is not reported.
+3. **Scan objects, not diffs.** Every blob, commit and tag in the object database is read exactly once, reachable or not, and checked for GitHub tokens, Slack tokens and webhooks, and AWS access keys. Classic GitHub tokens are confirmed against their built-in checksum, so a `ghp_` lookalike in a test fixture is not reported; an AWS key id names the account it belongs to without asking AWS.
 4. **Attribute afterwards.** Only for objects that contain a token does patty look up the path, the introducing commit, and the refs that still contain it.
 
 Mirrors live in a size-capped cache and are removed after the scan unless `--keep` is set, so pointing patty at an organization never fills a drive. [How patty works](docs/how-it-works.md) has the details, the token families it detects, and a [comparison with gitleaks](docs/how-it-works.md#compared-with-gitleaks).
@@ -102,7 +102,7 @@ make lint           # Run golangci-lint
 make help           # Show all available targets
 ```
 
-Test tokens are constructed at runtime -- classic GitHub tokens from a random part plus a computed checksum, Slack tokens from their id groups and secret -- so no token-shaped string is committed to this repository.
+Test tokens are constructed at runtime -- classic GitHub tokens from a random part plus a computed checksum, Slack tokens from their id groups and secret, AWS key ids from a prefix and a base32 body -- so no token-shaped string is committed to this repository.
 
 ## License
 

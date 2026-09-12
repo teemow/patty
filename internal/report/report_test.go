@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/teemow/patty/internal/detect"
+	"github.com/teemow/patty/internal/detect/aws"
 	"github.com/teemow/patty/internal/detect/github"
 	"github.com/teemow/patty/internal/detect/providers"
 	"github.com/teemow/patty/internal/detect/slack"
@@ -176,21 +177,59 @@ func TestRemediationStates(t *testing.T) {
 	}
 }
 
+func TestRemediationForKeyPairs(t *testing.T) {
+	idOnly := scan.Finding{Kind: aws.KindAccessKey, Verification: &detect.Verification{Status: detect.StatusUnverifiable, Detail: "secret not found near the key id"}}
+	steps := Remediation(idOnly, registry)
+	if len(steps) != 2 || steps[0].Label != "revoke" || !strings.HasPrefix(steps[0].Text, "if it is still valid, at https://console.aws.amazon.com/iam/home#/users; a key id found without its secret cannot be verified") || strings.Contains(steps[0].Text, "--revoke") {
+		t.Fatalf("id only: %+v", steps)
+	}
+	if steps[1].Label != "audit" || !strings.Contains(steps[1].Text, "CloudTrail") {
+		t.Fatalf("audit: %+v", steps)
+	}
+	pair := scan.Finding{Kind: aws.KindAccessKey, Verification: &detect.Verification{Status: detect.StatusActive, Detail: "arn:aws:iam::123456789012:user/alice, account 123456789012"}}
+	if steps := Remediation(pair, registry); len(steps) != 2 || steps[0].Text != "at https://console.aws.amazon.com/iam/home#/users; or run again with --revoke" || steps[1].Label != "audit" {
+		t.Fatalf("pair: %+v", steps)
+	}
+	dead := scan.Finding{Kind: aws.KindAccessKey, Verification: &detect.Verification{Status: detect.StatusRevoked}}
+	if steps := Remediation(dead, registry); len(steps) != 1 || steps[0].Label != "audit" {
+		t.Fatalf("a dead key still gets the audit advice: %+v", steps)
+	}
+	temp := scan.Finding{Kind: aws.KindTemporaryKey, Verification: &detect.Verification{Status: detect.StatusActive}}
+	if steps := Remediation(temp, registry); len(steps) != 2 || !strings.Contains(steps[0].Text, "STS keys expire on their own within hours") || strings.Contains(steps[0].Text, "--revoke") {
+		t.Fatalf("temporary: %+v", steps)
+	}
+	unverified := scan.Finding{Kind: aws.KindAccessKey}
+	if steps := Remediation(unverified, registry); len(steps) != 2 || !strings.HasSuffix(steps[0].Text, "; or with --verify --revoke") {
+		t.Fatalf("unverified: %+v", steps)
+	}
+}
+
 func TestTextShowsAttributionPerProvider(t *testing.T) {
+	loc := []scan.Location{{Repo: "acme/ops", Path: "bot.env", Line: 2, ObjectType: "blob", Commit: &gitrepo.Commit{SHA: "abcdef0123456789", Date: "2026-09-10T11:47:06+02:00"}, Refs: []string{"refs/heads/main"}}}
 	rs := []scan.Result{{Target: "acme/ops", Findings: []scan.Finding{
-		{Provider: "Slack", Kind: slack.KindBot, Fingerprint: "cccc", Token: "xoxb-SECRET", Redacted: "xoxb-S…T", Attribution: "team 1234567890, bot 1234567890123",
-			Locations: []scan.Location{{Repo: "acme/ops", Path: "bot.env", Line: 2, ObjectType: "blob", Commit: &gitrepo.Commit{SHA: "abcdef0123456789", Date: "2026-09-10T11:47:06+02:00"}, Refs: []string{"refs/heads/main"}}}},
+		{Provider: "Slack", Kind: slack.KindBot, Fingerprint: "cccc", Token: "xoxb-SECRET", Redacted: "xoxb-S…T", Attribution: "team 1234567890, bot 1234567890123", Locations: loc},
+		{Provider: "AWS", Kind: aws.KindAccessKey, Fingerprint: "dddd", Token: "AKIA-ID", Secret: "PAIRSECRET", Redacted: "AKIA-…D", Attribution: "account 123456789012, key pair", Locations: loc},
 	}}}
 	var buf bytes.Buffer
-	Text(&buf, rs, Options{})
+	Text(&buf, rs, Options{ShowSecrets: true})
 	out := buf.String()
-	for _, want := range []string{"1 credential found", "slack-bot-token", "team 1234567890, bot 1234567890123", "(shape match, no checksum)", "↳ revoke   if it is still valid, at https://api.slack.com/apps; or with --verify --revoke"} {
+	for _, want := range []string{"2 credentials found", "slack-bot-token", "team 1234567890, bot 1234567890123", "(shape match, no checksum)", "↳ revoke   if it is still valid, at https://api.slack.com/apps; or with --verify --revoke",
+		"aws-access-key", "AKIA-ID  fp dddd  account 123456789012, key pair", "↳ audit    check CloudTrail"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "SECRET") {
+	if strings.Contains(out, "PAIRSECRET") {
+		t.Fatalf("the companion secret is never shown, not even with --show-secrets:\n%s", out)
+	}
+	buf.Reset()
+	Text(&buf, rs, Options{})
+	if out := buf.String(); strings.Contains(out, "SECRET") {
 		t.Fatalf("secrets must be redacted:\n%s", out)
+	}
+	buf.Reset()
+	if err := JSON(&buf, rs, Options{ShowSecrets: true}); err != nil || strings.Contains(buf.String(), "PAIRSECRET") {
+		t.Fatalf("the companion secret never reaches the JSON: %v\n%s", err, buf.String())
 	}
 }
 

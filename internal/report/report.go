@@ -201,11 +201,16 @@ func Remediation(f scan.Finding, registry *detect.Registry) []Step {
 			steps = append(steps, Step{"history", h})
 		}
 	}
+	if note := registry.Info(f.Kind).AuditNote; note != "" {
+		steps = append(steps, Step{"audit", note})
+	}
 	return steps
 }
 
 // revokeAdvice tells where to revoke by hand and, when the API can do it,
 // how to let patty do it; otherwise what the provider's note says instead.
+// A credential patty cannot verify is never submitted by --revoke, so it
+// gets the note too.
 func revokeAdvice(f scan.Finding, info detect.KindInfo) string {
 	var parts []string
 	if info.RevokePage != "" {
@@ -221,7 +226,7 @@ func revokeAdvice(f scan.Finding, info detect.KindInfo) string {
 	switch {
 	case info.Revocable && f.Active():
 		parts = append(parts, "or run again with --revoke")
-	case info.Revocable:
+	case info.Revocable && !f.Unverifiable():
 		parts = append(parts, "or with --verify --revoke")
 	case info.RevokeNote != "":
 		parts = append(parts, info.RevokeNote)

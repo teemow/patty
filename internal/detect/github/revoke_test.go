@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/teemow/patty/internal/detect"
 )
 
 func TestRevoke(t *testing.T) {
@@ -36,20 +38,20 @@ func TestRevoke(t *testing.T) {
 	p := &Provider{BaseURL: srv.URL, Client: srv.Client()}
 	ctx := context.Background()
 
-	tokens := make([]string, revokeBatch+2)
+	tokens := make([]detect.Token, revokeBatch+2)
 	for i := range tokens {
-		tokens[i] = fmt.Sprintf("t%d", i)
+		tokens[i] = detect.Token{Kind: KindPAT, Value: fmt.Sprintf("t%d", i)}
 	}
 	if err := p.Revoke(ctx, tokens); err != nil {
 		t.Fatal(err)
 	}
-	if len(batches) != 2 || len(batches[0]) != revokeBatch || len(batches[1]) != 2 || batches[1][1] != tokens[revokeBatch+1] {
+	if len(batches) != 2 || len(batches[0]) != revokeBatch || len(batches[1]) != 2 || batches[1][1] != tokens[revokeBatch+1].Value {
 		t.Fatalf("batches: %d", len(batches))
 	}
 	if err := p.Revoke(ctx, nil); err != nil || len(batches) != 2 {
 		t.Fatalf("empty list must not call the API: %v", err)
 	}
-	if err := p.Revoke(ctx, []string{"spam"}); err == nil || err.Error() != "revocation refused: HTTP 422: Validation Failed" {
+	if err := p.Revoke(ctx, []detect.Token{{Kind: KindPAT, Value: "spam"}}); err == nil || err.Error() != "revocation refused: HTTP 422: Validation Failed" {
 		t.Fatalf("refused: %v", err)
 	}
 }

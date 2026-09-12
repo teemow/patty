@@ -13,10 +13,10 @@ import (
 // token: the token authenticates the request that revokes it. Slack answers
 // `ok: true, revoked: true` and rejects the token from then on; unlike
 // GitHub it does not notify anyone.
-func (p *Provider) Revoke(ctx context.Context, tokens []string) error {
+func (p *Provider) Revoke(ctx context.Context, tokens []detect.Token) error {
 	var errs []error
 	for _, tok := range tokens {
-		if err := p.revoke(ctx, tok, false); err != nil {
+		if err := p.revoke(ctx, tok.Value, false); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -26,8 +26,8 @@ func (p *Provider) Revoke(ctx context.Context, tokens []string) error {
 // DryRunRevoke implements detect.DryRunRevoker with auth.revoke's test
 // mode: Slack answers exactly as it would for the real request but leaves
 // the token alone.
-func (p *Provider) DryRunRevoke(ctx context.Context, token string) error {
-	return p.revoke(ctx, token, true)
+func (p *Provider) DryRunRevoke(ctx context.Context, tok detect.Token) error {
+	return p.revoke(ctx, tok.Value, true)
 }
 
 func (p *Provider) revoke(ctx context.Context, token string, dryRun bool) error {

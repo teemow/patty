@@ -38,6 +38,12 @@ type Token struct {
 	// contacting the provider: a team id in a Slack token, for example. Empty
 	// when the format carries nothing of the sort.
 	Attribution string
+	// Secret is the material a credential needs besides Value when it is made
+	// of several strings: the secret access key found next to an AWS key id,
+	// and the session token of a temporary one. Its layout is the provider's
+	// business. Value alone identifies the credential; Secret is never
+	// printed, logged or fingerprinted.
+	Secret string
 }
 
 // Fingerprint returns a short, stable, non-reversible identifier for the

@@ -141,20 +141,29 @@ func TestVerifyWebhooks(t *testing.T) {
 	}
 }
 
+// tokens wraps raw values as bot tokens for Revoke.
+func tokens(values ...string) []detect.Token {
+	out := make([]detect.Token, len(values))
+	for i, v := range values {
+		out[i] = detect.Token{Kind: KindBot, Value: v}
+	}
+	return out
+}
+
 func TestRevoke(t *testing.T) {
 	p, calls := server(t)
 	ctx := context.Background()
-	if err := p.Revoke(ctx, []string{"live", "livebot"}); err != nil {
+	if err := p.Revoke(ctx, tokens("live", "livebot")); err != nil {
 		t.Fatal(err)
 	}
 	if len(*calls) != 2 || (*calls)[0] != "POST /api/auth.revoke live " || (*calls)[1] != "POST /api/auth.revoke livebot " {
 		t.Fatalf("calls: %q", *calls)
 	}
-	err := p.Revoke(ctx, []string{"dead", "stubborn"})
+	err := p.Revoke(ctx, tokens("dead", "stubborn"))
 	if err == nil || !strings.Contains(err.Error(), "Slack refused the revocation: invalid_auth") || !strings.Contains(err.Error(), "did not revoke the token") {
 		t.Fatalf("errors must be reported per token: %v", err)
 	}
-	if err := p.Revoke(ctx, []string{bot()}); err == nil || strings.Contains(err.Error(), alnum24) {
+	if err := p.Revoke(ctx, tokens(bot())); err == nil || strings.Contains(err.Error(), alnum24) {
 		t.Fatalf("errors must name the token redacted: %v", err)
 	}
 	if err := p.Revoke(ctx, nil); err != nil {
@@ -166,13 +175,13 @@ func TestDryRunRevoke(t *testing.T) {
 	p, calls := server(t)
 	ctx := context.Background()
 	var _ detect.DryRunRevoker = p
-	if err := p.DryRunRevoke(ctx, "live"); err != nil {
+	if err := p.DryRunRevoke(ctx, tokens("live")[0]); err != nil {
 		t.Fatal(err)
 	}
 	if len(*calls) != 1 || (*calls)[0] != "POST /api/auth.revoke live 1" {
 		t.Fatalf("dry run must send test=1, got %q", *calls)
 	}
-	if err := p.DryRunRevoke(ctx, "dead"); err == nil || !strings.Contains(err.Error(), "invalid_auth") {
+	if err := p.DryRunRevoke(ctx, tokens("dead")[0]); err == nil || !strings.Contains(err.Error(), "invalid_auth") {
 		t.Fatalf("dry run reports the refusal: %v", err)
 	}
 }

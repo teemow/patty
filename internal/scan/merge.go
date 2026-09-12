@@ -19,6 +19,7 @@ func Merge(results []Result) []Finding {
 			}
 			m.Locations = append(m.Locations, f.Locations...)
 			m.Occurrences += f.Occurrences
+			m.complete(f.Secret, f.Attribution)
 			if m.Verification == nil {
 				m.Verification = f.Verification
 			}

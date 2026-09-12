@@ -24,7 +24,10 @@ func init() {
 		Long: `Revoke submits each token to its provider's revocation endpoint. GitHub
 tokens go to the unauthenticated credential revocation endpoint -- it is
 meant for whoever finds a leaked token -- and GitHub notifies the owner.
-Slack tokens go to auth.revoke, authenticated with the token itself.
+Slack tokens go to auth.revoke, authenticated with the token itself. An AWS
+access key is deactivated through iam:UpdateAccessKey on its own user,
+signed with the key itself, which only works when the input holds the key
+id and its secret and the user may manage its own keys.
 
 Tokens are read from the arguments, or from standard input when there are
 none, so a value never has to touch the shell history:
@@ -34,9 +37,10 @@ none, so a value never has to touch the shell history:
 
 Anything that is not a well-formed token is ignored. GitHub personal access
 tokens (classic and fine-grained), OAuth tokens, user-to-server and refresh
-tokens can be revoked, as can Slack bot, user and refresh tokens. GitHub
-installation tokens, Slack app-level and configuration tokens and webhooks
-cannot; the report says where to revoke those by hand.`,
+tokens can be revoked, as can Slack bot, user and refresh tokens and AWS
+access key pairs. GitHub installation tokens, Slack app-level and
+configuration tokens and webhooks, and temporary AWS keys cannot; the
+report says where to revoke those by hand.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.yes = yes
@@ -170,7 +174,7 @@ func rehearse(cmd *cobra.Command, f scan.Finding) string {
 	if !ok {
 		return ""
 	}
-	if err := dr.DryRunRevoke(cmd.Context(), f.Token); err != nil {
+	if err := dr.DryRunRevoke(cmd.Context(), f.Detected()); err != nil {
 		return "dry run: " + err.Error()
 	}
 	return "dry run: " + f.Provider + " would accept the revocation"
