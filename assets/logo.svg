@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 400" width="360" height="400">
+  <!-- patty: Marge's sister. Same Bouvier hair, one size smaller, parted in the middle, flipped at the ends. -->
+  <defs>
+    <clipPath id="hair">
+      <path d="M58 400 C 26 350, 14 280, 22 200 C 28 130, 50 70, 96 42 C 128 22, 164 28, 180 66 C 196 28, 232 22, 264 42 C 310 70, 332 130, 338 200 C 346 280, 334 350, 302 400 Z"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#hair)">
+    <rect x="0" y="0" width="360" height="400" fill="#8A9CB4"/>
+    <!-- lighter panel, like the two-tone Marge logo -->
+    <path d="M180 66 C 166 150, 140 200, 168 270 C 196 335, 262 360, 302 400 L 360 400 L 360 0 L 236 0 C 214 24, 190 40, 180 66 Z" fill="#A6B7CA"/>
+    <!-- darker shadow on the left -->
+    <path d="M22 200 C 60 220, 86 280, 70 400 L 0 400 L 0 200 Z" fill="#7A8CA4"/>
+    <!-- strands -->
+    <g fill="none" stroke="#F3F6FA" stroke-width="5" stroke-linecap="round">
+      <path d="M112 74 C 70 130, 62 220, 96 320" opacity="0.9"/>
+      <path d="M250 74 C 292 130, 300 220, 266 320" opacity="0.9"/>
+      <path d="M178 120 C 168 180, 176 240, 172 300" opacity="0.6"/>
+    </g>
+  </g>
+  <!-- the parting -->
+  <path d="M180 66 C 178 88, 176 108, 178 130" fill="none" stroke="#5F718A" stroke-width="5" stroke-linecap="round"/>
+  <!-- face: cut in the page colour -->
+  <path d="M122 400 L 122 290 C 122 246, 238 246, 238 290 L 238 400 Z" fill="#FFFFFF"/>
+  <!-- the flips: hair ends curling in towards the chin -->
+  <path d="M54 400 C 48 366, 82 344, 112 360 C 138 374, 136 400, 112 400 Z" fill="#7A8CA4"/>
+  <path d="M306 400 C 312 366, 278 344, 248 360 C 222 374, 224 400, 248 400 Z" fill="#A6B7CA"/>
+  <g fill="none" stroke="#F3F6FA" stroke-width="4" stroke-linecap="round" opacity="0.8">
+    <path d="M70 392 C 74 372, 96 364, 114 372"/>
+    <path d="M290 392 C 286 372, 264 364, 246 372"/>
+  </g>
+</svg>
