@@ -19,9 +19,13 @@ const revokeBatch = 1000
 // revocation. Tokens are submitted in batches the API accepts; GitHub
 // processes them asynchronously, so a nil error means every batch was
 // accepted, not that the tokens are already dead.
-func (p *Provider) Revoke(ctx context.Context, tokens []string) error {
-	for start := 0; start < len(tokens); start += revokeBatch {
-		if err := p.post(ctx, tokens[start:min(start+revokeBatch, len(tokens))]); err != nil {
+func (p *Provider) Revoke(ctx context.Context, tokens []detect.Token) error {
+	values := make([]string, len(tokens))
+	for i, tok := range tokens {
+		values[i] = tok.Value
+	}
+	for start := 0; start < len(values); start += revokeBatch {
+		if err := p.post(ctx, values[start:min(start+revokeBatch, len(values))]); err != nil {
 			return err
 		}
 	}

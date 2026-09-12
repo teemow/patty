@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/teemow/patty/internal/detect"
+	"github.com/teemow/patty/internal/detect/aws"
 	"github.com/teemow/patty/internal/detect/github"
 	"github.com/teemow/patty/internal/detect/slack"
 )
@@ -135,5 +136,21 @@ func TestMergeAndAnnotateLocal(t *testing.T) {
 	m := Merge(results)
 	if len(m) != 1 || m[0].Occurrences != 3 || len(m[0].Locations) != 2 || m[0].Revocation != RevocationDone || len(m[0].Local) != 1 {
 		t.Fatalf("Merge = %+v", m)
+	}
+}
+
+func TestMergeCompletesKeyPairs(t *testing.T) {
+	// The same key id, once alone and once with its secret: the merged
+	// finding is the pair, whichever came first.
+	alone := Finding{Kind: aws.KindAccessKey, Fingerprint: "k", Token: "id", Attribution: "account 1, key id only"}
+	paired := Finding{Kind: aws.KindAccessKey, Fingerprint: "k", Token: "id", Secret: "s", Attribution: "account 1, key pair"}
+	for _, order := range [][]Finding{{alone, paired}, {paired, alone}} {
+		m := Merge([]Result{{Findings: order[:1]}, {Findings: order[1:]}})
+		if len(m) != 1 || m[0].Secret != "s" || m[0].Attribution != "account 1, key pair" {
+			t.Fatalf("Merge = %+v", m)
+		}
+		if tok := m[0].Detected(); tok.Kind != aws.KindAccessKey || tok.Value != "id" || tok.Secret != "s" {
+			t.Fatalf("Detected = %+v", tok)
+		}
 	}
 }

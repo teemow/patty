@@ -2,6 +2,7 @@ package scan
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/teemow/patty/internal/detect"
+	"github.com/teemow/patty/internal/detect/aws"
 	"github.com/teemow/patty/internal/detect/github"
 	"github.com/teemow/patty/internal/detect/slack"
 	"github.com/teemow/patty/internal/disk"
@@ -140,6 +142,35 @@ func TestRepoFindsOrphanedFileAndMessageTokens(t *testing.T) {
 	for _, f := range res.Findings {
 		if f.Fingerprint == kept.Fingerprint {
 			t.Fatal("ignored fingerprint must not be reported")
+		}
+	}
+}
+
+func TestRepoCompletesKeyPairAcrossObjects(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	keyID := "AKIA" + "IOSFODNN7EXAMPLE"
+	secret := strings.Repeat("Ab1+", 10)
+	git(t, dir, "init", "-q", "-b", "main")
+	write(t, filepath.Join(dir, "README.md"), "The bucket is written with key "+keyID+".\n")
+	write(t, filepath.Join(dir, "credentials"), "[default]\naws_access_key_id = "+keyID+"\naws_secret_access_key = "+secret+"\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "add credentials")
+	repo, err := gitrepo.Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, workers := range []int{1, 4} {
+		res, err := Repo(ctx, "fixture", repo, nil, Options{Workers: workers})
+		if err != nil || len(res.Findings) != 1 {
+			t.Fatalf("workers=%d: %d findings, %v", workers, len(res.Findings), err)
+		}
+		f := res.Findings[0]
+		if f.Kind != aws.KindAccessKey || f.Secret != secret || f.Attribution != "account 581039954779, key pair" || f.Occurrences != 2 || len(f.Locations) != 2 {
+			t.Fatalf("workers=%d: %+v", workers, f)
+		}
+		if out, _ := json.Marshal(res); strings.Contains(string(out), secret) || strings.Contains(string(out), keyID) {
+			t.Fatalf("neither the secret nor the key id may reach the JSON: %s", out)
 		}
 	}
 }

@@ -68,7 +68,7 @@ var opts flags
 
 var rootCmd = &cobra.Command{
 	Use:   "patty [target...]",
-	Short: "Finds leaked GitHub and Slack tokens in every corner of a repository's history",
+	Short: "Finds leaked GitHub, Slack and AWS credentials in every corner of a repository's history",
 	Long: `Patty checks the credentials in your git history -- all of it.
 
 A target is a local repository path, an owner/repo, a github.com URL, or a
@@ -77,10 +77,11 @@ bare owner (user or organization) to scan every repository of.
 GitHub repositories are mirrored into a size-capped cache (all branches,
 tags and pull request refs), extended with commits the repository activity
 feed reports as force-pushed away or deleted, and every object in the
-database is scanned -- reachable or not. patty looks for GitHub tokens and
-Slack tokens and webhooks. Classic GitHub tokens are verified offline
-against their built-in checksum; --verify asks each provider whether a
-credential is still live, and --revoke asks it to revoke the live ones.
+database is scanned -- reachable or not. patty looks for GitHub tokens,
+Slack tokens and webhooks, and AWS access keys. Classic GitHub tokens are
+verified offline against their built-in checksum; --verify asks each
+provider whether a credential is still live, and --revoke asks it to revoke
+the live ones.
 
 Every credential comes with advice: where its owner revokes it, whether it
 is still configured on this machine, and what its history needs.

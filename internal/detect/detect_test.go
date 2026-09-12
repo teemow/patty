@@ -22,8 +22,8 @@ func (f fake) Find(content []byte) []Token {
 func (f fake) Verify(context.Context, Token) Verification {
 	return Verification{Status: StatusActive, Detail: f.name}
 }
-func (fake) Revoke(context.Context, []string) error { return nil }
-func (fake) LocalSources() LocalSources             { return LocalSources{} }
+func (fake) Revoke(context.Context, []Token) error { return nil }
+func (fake) LocalSources() LocalSources            { return LocalSources{} }
 
 func TestRegistryFindMergesAndNumbersLines(t *testing.T) {
 	r := NewRegistry(fake{"alpha"}, fake{"beta"})

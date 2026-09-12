@@ -56,16 +56,16 @@ func Revoke(ctx context.Context, results []Result, tokens []Finding, registry *d
 	var errs []error
 	for _, p := range order {
 		group := byProvider[p]
-		values := make([]string, len(group))
+		tokens := make([]detect.Token, len(group))
 		for i, f := range group {
-			values[i] = f.Token
+			tokens[i] = f.Detected()
 		}
-		if err := p.Revoke(ctx, values); err != nil {
+		if err := p.Revoke(ctx, tokens); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", p.Name(), err))
 			continue
 		}
 		for _, f := range group {
-			v := p.Verify(ctx, f.token())
+			v := p.Verify(ctx, f.Detected())
 			rev := RevocationPending
 			if v.Status == detect.StatusRevoked {
 				rev = RevocationDone

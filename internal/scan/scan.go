@@ -70,12 +70,15 @@ type Location struct {
 // Finding is one distinct credential and everywhere it appears.
 type Finding struct {
 	// Provider names the issuer of the credential: GitHub, Slack.
-	Provider         string      `json:"provider"`
-	Kind             detect.Kind `json:"kind"`
-	Fingerprint      string      `json:"fingerprint"`
-	Token            string      `json:"-"`
-	Redacted         string      `json:"token"`
-	ChecksumVerified bool        `json:"checksum_verified"`
+	Provider    string      `json:"provider"`
+	Kind        detect.Kind `json:"kind"`
+	Fingerprint string      `json:"fingerprint"`
+	Token       string      `json:"-"`
+	// Secret is the companion material of a credential made of several
+	// strings, when it was found next to the token; see detect.Token.Secret.
+	Secret           string `json:"-"`
+	Redacted         string `json:"token"`
+	ChecksumVerified bool   `json:"checksum_verified"`
 	// Attribution is what the credential's own shape says about its owner,
 	// such as the workspace id in a Slack token; known without --verify.
 	Attribution  string               `json:"attribution,omitempty"`
@@ -97,6 +100,12 @@ func (f Finding) Active() bool {
 // Revoked reports whether the provider confirmed the credential as dead.
 func (f Finding) Revoked() bool {
 	return f.Verification != nil && f.Verification.Status == detect.StatusRevoked
+}
+
+// Unverifiable reports whether the credential cannot be checked against its
+// provider, so no verdict about it will ever come.
+func (f Finding) Unverifiable() bool {
+	return f.Verification != nil && f.Verification.Status == detect.StatusUnverifiable
 }
 
 // Stats summarises one repository scan.
@@ -180,6 +189,8 @@ func Repo(ctx context.Context, name string, repo *gitrepo.Repo, rewrites []Rewri
 					f = NewFinding(registry, tok)
 					findings[tok.Value] = f
 					hits[tok.Value] = map[hit]bool{}
+				} else {
+					f.complete(tok.Secret, tok.Attribution)
 				}
 				f.Occurrences++
 				hits[tok.Value][hit{obj, tok.Line}] = true
@@ -205,7 +216,7 @@ func Repo(ctx context.Context, name string, repo *gitrepo.Repo, rewrites []Rewri
 	}
 	for _, f := range findings {
 		if opts.Verify {
-			v := registry.Verify(ctx, f.token())
+			v := registry.Verify(ctx, f.Detected())
 			f.Verification = &v
 		}
 		res.Findings = append(res.Findings, *f)
@@ -226,12 +237,23 @@ func NewFinding(registry *detect.Registry, tok detect.Token) *Finding {
 		Redacted:         detect.Redact(tok.Value),
 		ChecksumVerified: tok.ChecksumVerified,
 		Attribution:      tok.Attribution,
+		Secret:           tok.Secret,
 	}
 }
 
-// token rebuilds the detect.Token a finding stands for.
-func (f Finding) token() detect.Token {
-	return detect.Token{Kind: f.Kind, Value: f.Token}
+// Detected rebuilds the detect.Token a finding stands for.
+func (f Finding) Detected() detect.Token {
+	return detect.Token{Kind: f.Kind, Value: f.Token, Secret: f.Secret}
+}
+
+// complete takes over the companion secret and attribution of another
+// occurrence of the same credential when that occurrence carries more of it:
+// a key id that appears once with its secret and once without is one key
+// pair.
+func (f *Finding) complete(secret, attribution string) {
+	if len(secret) > len(f.Secret) {
+		f.Secret, f.Attribution = secret, attribution
+	}
 }
 
 // SortFindings orders active credentials first, then by kind and fingerprint.
