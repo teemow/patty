@@ -64,8 +64,23 @@ type Finding struct {
 	Redacted         string               `json:"token"`
 	ChecksumVerified bool                 `json:"checksum_verified"`
 	Verification     *detect.Verification `json:"verification,omitempty"`
-	Locations        []Location           `json:"locations"`
-	Occurrences      int                  `json:"occurrences"`
+	// Revocation records what happened when patty asked GitHub to revoke the token.
+	Revocation Revocation `json:"revocation,omitempty"`
+	// Local lists where the same token is configured on this machine.
+	Local     []string   `json:"local,omitempty"`
+	Locations []Location `json:"locations"`
+	// Occurrences counts objects the token appears in, across all locations.
+	Occurrences int `json:"occurrences"`
+}
+
+// Active reports whether GitHub confirmed the token as live.
+func (f Finding) Active() bool {
+	return f.Verification != nil && f.Verification.Status == detect.StatusActive
+}
+
+// Revoked reports whether GitHub confirmed the token as dead.
+func (f Finding) Revoked() bool {
+	return f.Verification != nil && f.Verification.Status == detect.StatusRevoked
 }
 
 // Stats summarises one repository scan.

@@ -18,6 +18,7 @@ import (
 	"github.com/teemow/patty/internal/disk"
 	"github.com/teemow/patty/internal/github"
 	"github.com/teemow/patty/internal/gitrepo"
+	"github.com/teemow/patty/internal/localcreds"
 	"github.com/teemow/patty/internal/report"
 	"github.com/teemow/patty/internal/scan"
 	"github.com/teemow/patty/internal/source"
@@ -40,8 +41,11 @@ func SetVersion(v string) {
 
 type flags struct {
 	verify          bool
+	revoke          bool
+	yes             bool
 	jsonOut         bool
 	showSecrets     bool
+	allRefs         bool
 	keep            bool
 	cacheDir        string
 	maxDisk         string
@@ -72,7 +76,10 @@ tags and pull request refs), extended with commits the repository activity
 feed reports as force-pushed away or deleted, and every object in the
 database is scanned -- reachable or not. Classic tokens are verified
 offline against their built-in checksum; --verify asks GitHub whether a
-token is still live.
+token is still live, and --revoke asks GitHub to revoke the live ones.
+
+Every token comes with advice: where its owner revokes it, whether it is
+still configured on this machine, and what its history needs.
 
 Exit code 0 means nothing was found, 1 that tokens were found, 2 that a
 target failed or was skipped and nothing was found.`,
@@ -85,8 +92,11 @@ target failed or was skipped and nothing was found.`,
 func init() {
 	f := rootCmd.Flags()
 	f.BoolVar(&opts.verify, "verify", false, "Check each token against the GitHub API to tell active tokens from revoked ones")
+	f.BoolVar(&opts.revoke, "revoke", false, "Ask GitHub to revoke every active token found (implies --verify; asks for confirmation)")
+	f.BoolVarP(&opts.yes, "yes", "y", false, "Revoke without asking for confirmation")
 	f.BoolVar(&opts.jsonOut, "json", false, "Print results as JSON")
 	f.BoolVar(&opts.showSecrets, "show-secrets", false, "Print full token values instead of redacted ones")
+	f.BoolVar(&opts.allRefs, "all-refs", false, "List every branch, tag and pull request a commit is on instead of the first five")
 	f.BoolVar(&opts.keep, "keep", false, "Keep mirrors in the cache after scanning (faster re-runs, bounded by --max-disk)")
 	f.StringVar(&opts.cacheDir, "cache-dir", defaultCacheDir(), "Directory for repository mirrors")
 	f.StringVar(&opts.maxDisk, "max-disk", "20G", "Total size the mirror cache may occupy")
@@ -134,7 +144,10 @@ func run(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	stderr := cmd.ErrOrStderr()
 	colors := isTerminal(os.Stdout) && os.Getenv("NO_COLOR") == ""
-	ropts := report.Options{Color: colors, ShowSecrets: opts.showSecrets}
+	ropts := report.Options{Color: colors, ShowSecrets: opts.showSecrets, AllRefs: opts.allRefs}
+	if opts.revoke {
+		opts.verify = true
+	}
 
 	cache, err := newCache()
 	if err != nil {
@@ -200,6 +213,14 @@ func run(cmd *cobra.Command, args []string) error {
 	results := scan.Run(ctx, targets, runOpts, func(r scan.Result) {
 		_, _ = fmt.Fprintln(stderr, report.StatusLine(r, ropts))
 	})
+	if scan.Summarize(results).Tokens > 0 {
+		scan.AnnotateLocal(results, localcreds.Match(localcreds.Find(ctx)))
+	}
+	if opts.revoke && ctx.Err() == nil {
+		if err := revokeActive(cmd, results, verifier); err != nil {
+			return err
+		}
+	}
 
 	if opts.jsonOut {
 		if err := report.JSON(cmd.OutOrStdout(), results, ropts); err != nil {

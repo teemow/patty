@@ -121,3 +121,55 @@ func TestRefs(t *testing.T) {
 		t.Fatalf("reachability = %q", got)
 	}
 }
+
+func TestTextIssuerLocalAndRemediation(t *testing.T) {
+	rs := sample()
+	rs[0].Findings[1].Verification = &detect.Verification{Status: detect.StatusActive, Detail: "user patty", ClientID: "178c6fc778ccc68e1d6a", App: "GitHub CLI", Expires: "2026-10-01"}
+	rs[0].Findings[1].Local = []string{"~/.config/gh/hosts.yml"}
+	var buf bytes.Buffer
+	Text(&buf, rs, Options{})
+	out := buf.String()
+	for _, want := range []string{
+		"user patty  issued to GitHub CLI  expires 2026-10-01",
+		"↳ revoke   at https://github.com/settings/tokens under GitHub CLI; or run again with --revoke",
+		"↳ local    still configured in ~/.config/gh/hosts.yml; replace it there after revoking",
+		"↳ history  acme/app: in orphaned commits GitHub still serves by SHA (GitHub Support can purge them) · acme/lib: in branch history (rewrite with git filter-repo, then force-push) · forks made in the meantime keep their own copy",
+		"↳ revoke   if it is still valid, at https://github.com/settings/applications; or with --verify --revoke",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+}
+
+func TestRemediationStates(t *testing.T) {
+	loc := []scan.Location{{Repo: "r", Commit: &gitrepo.Commit{}, Refs: []string{"refs/pull/1/head"}}}
+	revoked := scan.Finding{Kind: detect.KindPAT, Verification: &detect.Verification{Status: detect.StatusRevoked}, Local: []string{"~/.config/hub"}, Locations: loc}
+	if steps := Remediation(revoked); len(steps) != 0 {
+		t.Fatalf("revoked token needs nothing, got %+v", steps)
+	}
+	done := scan.Finding{Kind: detect.KindPAT, Revocation: scan.RevocationDone, Verification: &detect.Verification{Status: detect.StatusRevoked}, Locations: loc}
+	if steps := Remediation(done); len(steps) != 1 || steps[0].Text != "done, GitHub has notified the owner" {
+		t.Fatalf("done: %+v", steps)
+	}
+	pending := scan.Finding{Kind: detect.KindPAT, Revocation: scan.RevocationPending, Verification: &detect.Verification{Status: detect.StatusActive}, Locations: loc}
+	steps := Remediation(pending)
+	if len(steps) != 2 || !strings.HasPrefix(steps[0].Text, "GitHub accepted the revocation") || steps[1].Label != "history" || !strings.Contains(steps[1].Text, "r: only in pull request refs (GitHub Support has to purge those)") {
+		t.Fatalf("pending: %+v", steps)
+	}
+	app := scan.Finding{Kind: detect.KindServerToServer, Verification: &detect.Verification{Status: detect.StatusActive}}
+	if steps := Remediation(app); len(steps) != 1 || !strings.Contains(steps[0].Text, "installation tokens expire within an hour") || strings.Contains(steps[0].Text, "--revoke") {
+		t.Fatalf("installation token: %+v", steps)
+	}
+}
+
+func TestAllRefs(t *testing.T) {
+	refs := []string{"refs/heads/a", "refs/heads/b", "refs/heads/c", "refs/heads/d", "refs/heads/e", "refs/heads/f", "refs/heads/g"}
+	loc := scan.Location{Commit: &gitrepo.Commit{}, Refs: refs}
+	if got := reachability(loc, Options{}); got != "on a, b, c, d, e, +2 more" {
+		t.Fatalf("default = %q", got)
+	}
+	if got := reachability(loc, Options{AllRefs: true}); got != "on a, b, c, d, e, f, g" {
+		t.Fatalf("all = %q", got)
+	}
+}

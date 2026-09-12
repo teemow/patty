@@ -17,6 +17,18 @@ import (
 type Options struct {
 	Color       bool
 	ShowSecrets bool
+	// AllRefs lists every ref a commit is on instead of the first few.
+	AllRefs bool
+}
+
+// refLimit is how many refs a location line names before "+N more".
+const refLimit = 5
+
+func (o Options) refLimit() int {
+	if o.AllRefs {
+		return 0
+	}
+	return refLimit
 }
 
 const (
@@ -55,7 +67,7 @@ func StatusLine(r scan.Result, o Options) string {
 	}
 	line := fmt.Sprintf("%s %-32s %s", o.paint(color, mark), r.Target, o.paint(dim, scan.Describe(r)))
 	if n := len(r.Findings); n > 0 {
-		line += " · " + o.paint(bold+red, fmt.Sprintf("%d %s", n, plural(n, "token", "tokens")))
+		line += " · " + o.paint(bold+red, fmt.Sprintf("%d %s", n, Plural(n, "token", "tokens")))
 	}
 	for _, note := range r.Notes {
 		line += "\n  " + o.paint(yellow, "note: "+note)
@@ -67,7 +79,7 @@ func StatusLine(r scan.Result, o Options) string {
 // it was found, followed by a summary line.
 func Text(w io.Writer, results []scan.Result, o Options) {
 	p := printer{w}
-	findings := merge(results)
+	findings := scan.Merge(results)
 	s := scan.Summarize(results)
 
 	if len(findings) == 0 {
@@ -75,7 +87,7 @@ func Text(w io.Writer, results []scan.Result, o Options) {
 		return
 	}
 
-	head := fmt.Sprintf("%d GitHub %s found", len(findings), plural(len(findings), "token", "tokens"))
+	head := fmt.Sprintf("%d GitHub %s found", len(findings), Plural(len(findings), "token", "tokens"))
 	if s.Active > 0 {
 		head += o.paint(red+bold, fmt.Sprintf(" (%d active)", s.Active))
 	}
@@ -97,8 +109,12 @@ func Text(w io.Writer, results []scan.Result, o Options) {
 			}
 		}
 		p.f("\n%s %-10s %-24s %s  %s", o.paint(color, "●"), o.paint(color, state), f.Kind, o.paint(bold, value), o.paint(dim, "fp "+f.Fingerprint))
-		if f.Verification != nil && f.Verification.Detail != "" {
-			p.f("  %s", o.paint(dim, f.Verification.Detail))
+		if v := f.Verification; v != nil {
+			for _, part := range []string{v.Detail, issuedTo(*v), expires(*v)} {
+				if part != "" {
+					p.f("  %s", o.paint(dim, part))
+				}
+			}
 		}
 		if !f.ChecksumVerified {
 			p.f("  %s", o.paint(dim, "(shape match, no checksum)"))
@@ -120,8 +136,133 @@ func Text(w io.Writer, results []scan.Result, o Options) {
 			p.ln()
 			p.f("    %s  %s\n", strings.Repeat(" ", len(l.Repo)), o.paint(dim, reachability(l, o)))
 		}
+		for _, line := range Remediation(f) {
+			p.f("    %s %-8s %s\n", o.paint(color, "↳"), o.paint(bold, line.Label), line.Text)
+		}
 	}
 	p.ln()
+}
+
+func issuedTo(v detect.Verification) string {
+	if issuer := v.Issuer(); issuer != "" {
+		return "issued to " + issuer
+	}
+	return ""
+}
+
+func expires(v detect.Verification) string {
+	if v.Expires != "" {
+		return "expires " + v.Expires
+	}
+	return ""
+}
+
+// Step is one line of advice under a finding.
+type Step struct {
+	Label string
+	Text  string
+}
+
+// Remediation says what to do about a token: how to revoke it, where it is
+// still configured on this machine, and what its history needs. A token
+// GitHub already rejects needs nothing.
+func Remediation(f scan.Finding) []Step {
+	var steps []Step
+	switch {
+	case f.Revocation == scan.RevocationPending:
+		steps = append(steps, Step{"revoke", "GitHub accepted the revocation and is still processing it; run again with --verify to confirm"})
+	case f.Revocation == scan.RevocationDone:
+		steps = append(steps, Step{"revoke", "done, GitHub has notified the owner"})
+	case f.Revoked():
+	default:
+		steps = append(steps, Step{"revoke", revokeAdvice(f)})
+	}
+	if len(f.Local) > 0 && !f.Revoked() {
+		steps = append(steps, Step{"local", "still configured in " + strings.Join(f.Local, ", ") + "; replace it there after revoking"})
+	}
+	if !f.Revoked() {
+		if h := historyAdvice(f.Locations); h != "" {
+			steps = append(steps, Step{"history", h})
+		}
+	}
+	return steps
+}
+
+func revokeAdvice(f scan.Finding) string {
+	var s string
+	if page := detect.RevokePage(f.Kind); page != "" {
+		s = "at " + page
+		if f.Verification != nil {
+			if app := f.Verification.App; app != "" {
+				s += " under " + app
+			}
+		}
+	}
+	if !f.Active() {
+		s = "if it is still valid, " + s
+	}
+	if detect.Revocable(f.Kind) {
+		if s != "" {
+			s += "; or "
+		}
+		if f.Active() {
+			s += "run again with --revoke"
+		} else {
+			s += "with --verify --revoke"
+		}
+	} else if f.Kind == detect.KindServerToServer {
+		s = "installation tokens expire within an hour; check the app's installation " + s
+	}
+	return strings.TrimSpace(s)
+}
+
+// historyAdvice summarises, per repository, how a token can be removed from
+// history and who has to do it.
+func historyAdvice(locs []scan.Location) string {
+	type state struct{ branches, pulls, orphaned bool }
+	states := map[string]*state{}
+	var repos []string
+	for _, l := range locs {
+		st, ok := states[l.Repo]
+		if !ok {
+			st = &state{}
+			states[l.Repo] = st
+			repos = append(repos, l.Repo)
+		}
+		switch {
+		case l.Commit == nil:
+		case l.Orphaned:
+			st.orphaned = true
+		default:
+			g := groupRefs(l.Refs)
+			if len(g.branches) > 0 || len(g.tags) > 0 || len(g.other) > 0 {
+				st.branches = true
+			} else {
+				st.pulls = true
+			}
+		}
+	}
+	var parts []string
+	for _, repo := range repos {
+		st := states[repo]
+		var how []string
+		if st.branches {
+			how = append(how, "in branch history (rewrite with git filter-repo, then force-push)")
+		}
+		if st.pulls {
+			how = append(how, "only in pull request refs (GitHub Support has to purge those)")
+		}
+		if st.orphaned {
+			how = append(how, "in orphaned commits GitHub still serves by SHA (GitHub Support can purge them)")
+		}
+		if len(how) > 0 {
+			parts = append(parts, repo+": "+strings.Join(how, " and "))
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, " · ") + " · forks made in the meantime keep their own copy"
 }
 
 func reachability(l scan.Location, o Options) string {
@@ -137,9 +278,9 @@ func reachability(l scan.Location, o Options) string {
 	}
 	g := groupRefs(l.Refs)
 	if len(g.branches) == 0 && len(g.tags) == 0 {
-		return o.paint(yellow, "not on any branch or tag, only reachable through pull request refs: "+join(g.pulls, 5))
+		return o.paint(yellow, "not on any branch or tag, only reachable through pull request refs: "+join(g.pulls, o.refLimit()))
 	}
-	return "on " + Refs(l.Refs, 5)
+	return "on " + Refs(l.Refs, o.refLimit())
 }
 
 type refGroups struct {
@@ -186,7 +327,7 @@ func isDefault(branch string) bool {
 
 // Refs renders ref names compactly: branches by name (default branches
 // first), tags as "tag v1", pull request refs as "PR #12", at most limit
-// entries.
+// entries; limit 0 means all of them.
 func Refs(refs []string, limit int) string {
 	g := groupRefs(refs)
 	names := append(append(append(g.branches, g.tags...), g.pulls...), g.other...)
@@ -194,43 +335,14 @@ func Refs(refs []string, limit int) string {
 }
 
 func join(names []string, limit int) string {
-	if len(names) > limit {
+	if limit > 0 && len(names) > limit {
 		return strings.Join(names[:limit], ", ") + fmt.Sprintf(", +%d more", len(names)-limit)
 	}
 	return strings.Join(names, ", ")
 }
 
-// merge groups findings across repositories by fingerprint.
-func merge(results []scan.Result) []scan.Finding {
-	byFP := map[string]*scan.Finding{}
-	var order []string
-	for _, r := range results {
-		for _, f := range r.Findings {
-			m, ok := byFP[f.Fingerprint]
-			if !ok {
-				cp := f
-				cp.Locations = nil
-				byFP[f.Fingerprint] = &cp
-				m = &cp
-				order = append(order, f.Fingerprint)
-			}
-			m.Locations = append(m.Locations, f.Locations...)
-			m.Occurrences += f.Occurrences
-			if m.Verification == nil {
-				m.Verification = f.Verification
-			}
-		}
-	}
-	out := make([]scan.Finding, 0, len(order))
-	for _, fp := range order {
-		out = append(out, *byFP[fp])
-	}
-	scan.SortFindings(out)
-	return out
-}
-
 func footer(s scan.Summary) string {
-	parts := []string{fmt.Sprintf("%d %s", s.Repos, plural(s.Repos, "repository", "repositories"))}
+	parts := []string{fmt.Sprintf("%d %s", s.Repos, Plural(s.Repos, "repository", "repositories"))}
 	if s.Failed > 0 {
 		parts = append(parts, fmt.Sprintf("%d failed", s.Failed))
 	}
@@ -283,7 +395,8 @@ func JSON(w io.Writer, results []scan.Result, o Options) error {
 	return enc.Encode(out)
 }
 
-func plural(n int, one, many string) string {
+// Plural picks the singular or plural form for n.
+func Plural(n int, one, many string) string {
 	if n == 1 {
 		return one
 	}
