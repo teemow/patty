@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/creativeprojects/go-selfupdate v1.6.0
-	github.com/giantswarm/selfupdate-cosign v0.1.2-0.20260912152440-812fdba492d6
+	github.com/giantswarm/selfupdate-cosign v0.2.0
 	github.com/google/go-github/v91 v91.0.0
 	github.com/sigstore/sigstore-go v1.3.0
 	github.com/spf13/cobra v1.10.2
