@@ -42,6 +42,10 @@ archives:
         formats: [zip]
     files:
       - none*
+  # The bare binaries, under the names self-update downloads.
+  - id: binary
+    formats: [binary]
+    name_template: '{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}'
 
 checksum:
   algorithm: sha256
@@ -54,16 +58,12 @@ release:
   draft: false
   prerelease: auto
   name_template: "{{.ProjectName}} v{{.Version}}"
-  extra_files:
-    - glob: ./dist/patty_darwin_amd64*/patty
-      name_template: patty_darwin_amd64
-    - glob: ./dist/patty_darwin_arm64*/patty
-      name_template: patty_darwin_arm64
-    - glob: ./dist/patty_linux_amd64*/patty
-      name_template: patty_linux_amd64
-    - glob: ./dist/patty_linux_arm64*/patty
-      name_template: patty_linux_arm64
-    - glob: ./dist/patty_windows_amd64*/patty.exe
-      name_template: patty_windows_amd64.exe
-    - glob: ./dist/patty_windows_arm64*/patty.exe
-      name_template: patty_windows_arm64.exe
+
+# Every asset gets a Sigstore bundle next to it, signed keyless by the
+# release workflow (teemow/github-workflows release-go.yml). self-update
+# verifies the download against it before replacing the binary.
+signs:
+  - cmd: cosign
+    signature: '${artifact}.bundle'
+    args: ['sign-blob', '--yes', '--bundle=${signature}', '${artifact}']
+    artifacts: all
