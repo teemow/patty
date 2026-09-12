@@ -91,7 +91,7 @@ Each token is listed once with every place it was found, the oldest commit that 
 3. **Scan objects, not diffs.** Every blob, commit and tag in the object database is read exactly once, reachable or not. Classic tokens are confirmed against their built-in checksum, so a `ghp_` lookalike in a test fixture is not reported.
 4. **Attribute afterwards.** Only for objects that contain a token does patty look up the path, the introducing commit, and the refs that still contain it.
 
-Mirrors live in a size-capped cache and are removed after the scan unless `--keep` is set, so pointing patty at an organization never fills a drive. [How patty works](docs/how-it-works.md) has the details, the token families it detects, and a [comparison with gitleaks](docs/how-it-works.md#compared-with-gitleaks).
+Mirrors live in a size-capped cache and are removed after the scan unless `--keep` is set, so pointing patty at an organization never fills a drive. [How patty works](docs/how-it-works.md) has the details, the token families it detects, and a [comparison with gitleaks](docs/how-it-works.md#compared-with-gitleaks). [Which credentials patty could check next](docs/credentials.md) ranks the other families worth the same treatment.
 
 ## Development
 

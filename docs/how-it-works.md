@@ -51,7 +51,7 @@ The scan itself is two substring searches per object (for `gh` and `github_pat_`
 | Scope | one repository or directory | any number of repositories, whole owners, with a disk budget |
 | Everything else | AWS, Slack, Stripe, private keys, ... | GitHub tokens only |
 
-Use both: gitleaks in CI on every push, patty when you want to know what is already out there.
+Use both: gitleaks in CI on every push, patty when you want to know what is already out there. [Which credentials patty could check next](credentials.md) lists the other families that would get the same treatment, and which gitleaks rules they map to.
 
 ## Disk budget
 
