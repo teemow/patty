@@ -99,3 +99,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
 )
+
+// v0.4.1 and v0.4.2 were published with a document that did not belong in a
+// public repository. v0.4.1 also lacks the cosign check in self-update.
+retract [v0.4.1, v0.4.2]
