@@ -41,13 +41,16 @@ type RunOptions struct {
 // times the reported size.
 const sizeSlack = 3
 
-// Run scans all targets and calls onResult as each completes. Results are
-// returned in target order.
+// Run scans all targets and calls onResult as each completes, one call at
+// a time. Results are returned in target order.
 func Run(ctx context.Context, targets []source.Target, opts RunOptions, onResult func(Result)) []Result {
 	results := make([]Result, len(targets))
 	parallel := max(opts.Parallel, 1)
 	sem := make(chan struct{}, parallel)
-	var wg sync.WaitGroup
+	var (
+		wg       sync.WaitGroup
+		reportMu sync.Mutex
+	)
 	for i, t := range targets {
 		if ctx.Err() != nil {
 			results[i] = Result{Target: t.Display, Err: ctx.Err(), Error: ctx.Err().Error()}
@@ -64,7 +67,9 @@ func Run(ctx context.Context, targets []source.Target, opts RunOptions, onResult
 			}
 			results[i] = res
 			if onResult != nil {
+				reportMu.Lock()
 				onResult(res)
+				reportMu.Unlock()
 			}
 		}()
 	}
