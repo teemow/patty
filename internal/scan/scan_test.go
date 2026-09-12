@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/teemow/patty/internal/detect"
+	"github.com/teemow/patty/internal/detect/github"
+	"github.com/teemow/patty/internal/detect/slack"
 	"github.com/teemow/patty/internal/disk"
 	"github.com/teemow/patty/internal/gitrepo"
 	"github.com/teemow/patty/internal/source"
@@ -30,7 +32,12 @@ func git(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-func token(prefix, random string) string { return prefix + random + detect.Checksum(random) }
+func token(prefix, random string) string { return prefix + random + github.Checksum(random) }
+
+// webhook builds a Slack incoming webhook URL at runtime.
+func webhook() string {
+	return "https://hooks.slack.com/" + "services/" + "T" + "0123ABCD" + "/" + "B" + "0123ABCDEF" + "/" + "AbCdEfGhIjKlMnOpQrStUvWx"
+}
 
 func write(t *testing.T, path, content string) {
 	t.Helper()
@@ -47,8 +54,8 @@ const (
 )
 
 // fixture: commit 1 leaks a token, is amended away (orphaned); commit 2 leaks
-// another token in a file plus one in its commit message; a large file holds
-// a token that must be skipped by the size limit.
+// another token and a Slack webhook in a file plus one token in its commit
+// message; a large file holds a token that must be skipped by the size limit.
 func fixture(t *testing.T) (dir string, orphanCommit string) {
 	t.Helper()
 	dir = t.TempDir()
@@ -59,7 +66,7 @@ func fixture(t *testing.T) (dir string, orphanCommit string) {
 	orphanCommit = git(t, dir, "rev-parse", "HEAD")
 
 	write(t, filepath.Join(dir, ".env"), "GITHUB_TOKEN=\n")
-	write(t, filepath.Join(dir, "deploy.sh"), "#!/bin/sh\n\ncurl -H 'Authorization: token "+token("gho_", keptRandom)+"' https://api.github.com\n")
+	write(t, filepath.Join(dir, "deploy.sh"), "#!/bin/sh\n\ncurl -H 'Authorization: token "+token("gho_", keptRandom)+"' https://api.github.com\ncurl -d '{}' "+webhook()+"\n")
 	write(t, filepath.Join(dir, "big.log"), strings.Repeat("x", 4096)+token("ghs_", ignoredRandom)+"\n")
 	git(t, dir, "add", ".")
 	git(t, dir, "commit", "-q", "--amend", "-m", "add deploy script\n\nuses "+token("ghu_", messageRandom)+" for now")
@@ -86,11 +93,14 @@ func TestRepoFindsOrphanedFileAndMessageTokens(t *testing.T) {
 	for _, f := range res.Findings {
 		byKind[f.Kind] = f
 	}
-	if len(res.Findings) != 3 {
-		t.Fatalf("want 3 findings, got %d: %+v", len(res.Findings), res.Findings)
+	if len(res.Findings) != 4 {
+		t.Fatalf("want 4 findings, got %d: %+v", len(res.Findings), res.Findings)
 	}
 
-	orphan := byKind[detect.KindPAT]
+	orphan := byKind[github.KindPAT]
+	if orphan.Provider != "GitHub" || orphan.Attribution != "" {
+		t.Fatalf("orphan provider: %+v", orphan)
+	}
 	if len(orphan.Locations) != 1 {
 		t.Fatalf("orphan locations: %+v", orphan.Locations)
 	}
@@ -102,21 +112,29 @@ func TestRepoFindsOrphanedFileAndMessageTokens(t *testing.T) {
 		t.Fatalf("redaction: %+v", orphan)
 	}
 
-	kept := byKind[detect.KindOAuth]
+	kept := byKind[github.KindOAuth]
 	loc = kept.Locations[0]
 	if loc.Path != "deploy.sh" || loc.Line != 3 || loc.Orphaned || len(loc.Refs) != 1 || loc.Refs[0] != "refs/heads/main" || loc.Commit.Subject != "add deploy script" || loc.Rewrite != "" {
 		t.Fatalf("kept location: %+v commit=%+v", loc, loc.Commit)
 	}
 
-	msg := byKind[detect.KindUserToServer]
+	msg := byKind[github.KindUserToServer]
 	loc = msg.Locations[0]
 	if loc.ObjectType != "commit" || loc.Path != "" || loc.Orphaned || loc.Commit == nil || loc.Commit.Subject != "add deploy script" {
 		t.Fatalf("message location: %+v commit=%+v", loc, loc.Commit)
 	}
 
+	hook := byKind[slack.KindWebhook]
+	if hook.Provider != "Slack" || hook.Attribution != "team T0123ABCD, bot B0123ABCDEF" || hook.ChecksumVerified || len(hook.Locations) != 1 || hook.Locations[0].Line != 4 {
+		t.Fatalf("webhook finding: %+v", hook)
+	}
+	if hook.Redacted == hook.Token || !strings.HasPrefix(hook.Redacted, "https://hooks.slack.com/services/T0123ABCD/B0123ABCDEF/") {
+		t.Fatalf("webhook redaction: %q", hook.Redacted)
+	}
+
 	// Ignoring by fingerprint drops the finding entirely.
 	res, err = Repo(ctx, "fixture", repo, nil, Options{Workers: 1, Ignore: map[string]bool{kept.Fingerprint: true}})
-	if err != nil || len(res.Findings) != 3 { // no size limit: the large object's token appears, the ignored one disappears
+	if err != nil || len(res.Findings) != 4 { // no size limit: the large object's token appears, the ignored one disappears
 		t.Fatalf("ignore: %d findings, %v", len(res.Findings), err)
 	}
 	for _, f := range res.Findings {
@@ -135,14 +153,14 @@ func TestRunLocalTargetAndSummary(t *testing.T) {
 	if len(results) != 2 || len(seen) != 2 {
 		t.Fatalf("results=%d seen=%d", len(results), len(seen))
 	}
-	if results[0].Err != nil || len(results[0].Findings) != 4 || results[0].Stats.Refs != 1 {
+	if results[0].Err != nil || len(results[0].Findings) != 5 || results[0].Stats.Refs != 1 {
 		t.Fatalf("local: %+v", results[0])
 	}
 	if results[1].Err == nil || results[1].Error == "" {
 		t.Fatalf("missing: %+v", results[1])
 	}
 	s := Summarize(results)
-	if s.Repos != 2 || s.Failed != 1 || s.Tokens != 4 || s.Active != 0 {
+	if s.Repos != 2 || s.Failed != 1 || s.Tokens != 5 || s.Active != 0 {
 		t.Fatalf("summary: %+v", s)
 	}
 	if d := Describe(results[1]); !strings.HasPrefix(d, "failed: ") {

@@ -8,19 +8,27 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/teemow/patty/internal/detect"
+	"github.com/teemow/patty/internal/detect/github"
+	"github.com/teemow/patty/internal/detect/slack"
 	"github.com/teemow/patty/internal/scan"
 )
 
 func token(kind byte, random string) string {
-	return "gh" + string(kind) + "_" + random + detect.Checksum(random)
+	return "gh" + string(kind) + "_" + random + github.Checksum(random)
+}
+
+// slackBot builds a well-formed bot token at runtime.
+func slackBot(secret string) string {
+	return "xoxb-" + "1234567890" + "-" + "1234567890123" + "-" + secret
 }
 
 func TestParseTokens(t *testing.T) {
 	pat := token('p', "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
 	app := token('s', "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")
-	input := "leaked: " + pat + "\n" + pat + "\nnot-a-token gh" + "p_short\n" + app + "\n"
+	bot := slackBot(strings.Repeat("Ab", 12))
+	input := "leaked: " + pat + "\n" + pat + "\nnot-a-token gh" + "p_short\n" + app + "\n" + bot + "\n"
 	got := parseTokens(input)
-	if len(got) != 2 || got[0].Value != pat || got[1].Kind != detect.KindServerToServer {
+	if len(got) != 3 || got[0].Value != pat || got[1].Kind != github.KindServerToServer || got[2].Kind != slack.KindBot {
 		t.Fatalf("parseTokens = %+v", got)
 	}
 }
@@ -44,25 +52,42 @@ func TestRevokeRefusesWithoutTerminalOrYes(t *testing.T) {
 	rc, _, _ := rootCmd.Find([]string{"revoke"})
 	rc.SetIn(strings.NewReader("nothing here"))
 	rc.SetErr(&stderr)
-	if err := runRevoke(rc, nil); err == nil || err.Error() != "no GitHub tokens in the input" {
+	if err := runRevoke(rc, nil); err == nil || err.Error() != "no tokens in the input" {
 		t.Fatalf("empty: %v", err)
 	}
 	rc.SetIn(strings.NewReader(token('s', "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCC")))
 	if err := runRevoke(rc, nil); err == nil || err.Error() != "nothing to revoke" || !strings.Contains(stderr.String(), "cannot be revoked through the API") {
 		t.Fatalf("installation token: %v\n%s", err, stderr.String())
 	}
+	stderr.Reset()
+	rc.SetIn(strings.NewReader("https://hooks.slack.com/" + "services/" + "T" + "0123ABCD" + "/" + "B" + "0123ABCDEF" + "/" + "AbCdEfGhIjKlMnOpQrStUvWx"))
+	if err := runRevoke(rc, nil); err == nil || err.Error() != "nothing to revoke" || !strings.Contains(stderr.String(), "slack-webhook credentials cannot be revoked") {
+		t.Fatalf("webhook: %v\n%s", err, stderr.String())
+	}
+}
+
+func TestProviderNames(t *testing.T) {
+	if got := providerNames([]scan.Finding{{Provider: "Slack"}, {Provider: "GitHub"}, {Provider: "Slack"}}); got != "GitHub and Slack" {
+		t.Fatalf("providerNames = %q", got)
+	}
+	if got := providerNames([]scan.Finding{{Provider: "GitHub"}}); got != "GitHub" {
+		t.Fatalf("providerNames = %q", got)
+	}
 }
 
 func TestWarnings(t *testing.T) {
-	cli := scan.Finding{Kind: detect.KindOAuth, Verification: &detect.Verification{App: "GitHub CLI"}, Local: []string{"~/.config/gh/hosts.yml"}}
+	cli := scan.Finding{Kind: github.KindOAuth, Verification: &detect.Verification{App: "GitHub CLI"}, Local: []string{"~/.config/gh/hosts.yml"}}
 	got := warnings(cli)
 	if len(got) != 2 || !strings.Contains(got[0], "whole authorization of GitHub CLI") || !strings.Contains(got[1], "~/.config/gh/hosts.yml") {
 		t.Fatalf("warnings = %q", got)
 	}
-	if got := warnings(scan.Finding{Kind: detect.KindPAT}); len(got) != 0 {
+	if got := warnings(scan.Finding{Kind: github.KindPAT}); len(got) != 0 {
 		t.Fatalf("plain PAT has no warnings: %q", got)
 	}
-	if got := warnings(scan.Finding{Kind: detect.KindUserToServer}); len(got) != 1 || !strings.Contains(got[0], "this application") {
+	if got := warnings(scan.Finding{Kind: github.KindUserToServer}); len(got) != 1 || !strings.Contains(got[0], "this application") {
 		t.Fatalf("unknown app: %q", got)
+	}
+	if got := warnings(scan.Finding{Kind: slack.KindBot}); len(got) != 1 || !strings.Contains(got[0], "reinstalled") {
+		t.Fatalf("slack bot: %q", got)
 	}
 }

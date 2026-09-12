@@ -2,64 +2,82 @@ package scan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/teemow/patty/internal/detect"
 )
 
-// Revocation is the outcome of asking GitHub to revoke a token.
+// Revocation is the outcome of asking a provider to revoke a credential.
 type Revocation string
 
 const (
-	// RevocationDone means GitHub accepted the request and no longer honours the token.
+	// RevocationDone means the provider accepted the request and no longer honours the credential.
 	RevocationDone Revocation = "revoked"
-	// RevocationPending means GitHub accepted the request but still answered
-	// the follow-up check as active; revocations are processed asynchronously.
+	// RevocationPending means the provider accepted the request but still
+	// answered the follow-up check as active; GitHub processes revocations
+	// asynchronously.
 	RevocationPending Revocation = "pending"
-	// RevocationUnsupported means the token family cannot be revoked through the API.
+	// RevocationUnsupported means the credential family cannot be revoked through the API.
 	RevocationUnsupported Revocation = "unsupported"
 )
 
-// Revocable returns the distinct active tokens across results that GitHub's
-// revocation endpoint accepts, active ones first.
-func Revocable(results []Result) []Finding {
+// Revocable returns the distinct active credentials across results that
+// their provider's revocation endpoint accepts, active ones first.
+func Revocable(results []Result, registry *detect.Registry) []Finding {
 	var out []Finding
 	for _, f := range Merge(results) {
-		if f.Active() && detect.Revocable(f.Kind) {
+		if f.Active() && registry.Revocable(f.Kind) {
 			out = append(out, f)
 		}
 	}
 	return out
 }
 
-// Revoke asks GitHub to revoke the given tokens, checks each one again and
-// records the outcome on every finding of that token in results. It returns
-// the number of tokens GitHub confirmed dead.
-func Revoke(ctx context.Context, results []Result, tokens []Finding, revoker *detect.Revoker, verifier *detect.Verifier) (int, error) {
-	values := make([]string, 0, len(tokens))
+// Revoke asks each credential's provider to revoke it, checks each one
+// again and records the outcome on every finding of that credential in
+// results. It returns the number of credentials the providers confirmed
+// dead. A provider that refuses is reported in the error; the other
+// providers' credentials are still revoked and checked.
+func Revoke(ctx context.Context, results []Result, tokens []Finding, registry *detect.Registry) (int, error) {
+	byProvider := map[detect.Provider][]Finding{}
+	var order []detect.Provider
 	for _, f := range tokens {
-		if !detect.Revocable(f.Kind) {
-			return 0, fmt.Errorf("%s tokens (%s) cannot be revoked through the API", f.Kind, f.Fingerprint)
+		p := registry.Provider(f.Kind)
+		if p == nil || !registry.Revocable(f.Kind) {
+			return 0, fmt.Errorf("%s credentials (%s) cannot be revoked through the API", f.Kind, f.Fingerprint)
 		}
-		values = append(values, f.Token)
-	}
-	if err := revoker.Revoke(ctx, values); err != nil {
-		return 0, err
+		if _, seen := byProvider[p]; !seen {
+			order = append(order, p)
+		}
+		byProvider[p] = append(byProvider[p], f)
 	}
 	done := 0
-	for _, f := range tokens {
-		v := verifier.Verify(ctx, detect.Token{Kind: f.Kind, Value: f.Token})
-		rev := RevocationPending
-		if v.Status == detect.StatusRevoked {
-			rev = RevocationDone
-			done++
+	var errs []error
+	for _, p := range order {
+		group := byProvider[p]
+		values := make([]string, len(group))
+		for i, f := range group {
+			values[i] = f.Token
 		}
-		if v.Status == detect.StatusUnknown {
-			v = *f.Verification // keep what we knew rather than a transient error
+		if err := p.Revoke(ctx, values); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", p.Name(), err))
+			continue
 		}
-		record(results, f.Fingerprint, v, rev)
+		for _, f := range group {
+			v := p.Verify(ctx, f.token())
+			rev := RevocationPending
+			if v.Status == detect.StatusRevoked {
+				rev = RevocationDone
+				done++
+			}
+			if v.Status == detect.StatusUnknown && f.Verification != nil {
+				v = *f.Verification // keep what we knew rather than a transient error
+			}
+			record(results, f.Fingerprint, v, rev)
+		}
 	}
-	return done, nil
+	return done, errors.Join(errs...)
 }
 
 func record(results []Result, fingerprint string, v detect.Verification, rev Revocation) {

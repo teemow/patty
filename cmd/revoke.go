@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -19,10 +20,11 @@ func init() {
 	var yes bool
 	revokeCmd := &cobra.Command{
 		Use:   "revoke [token...]",
-		Short: "Ask GitHub to revoke tokens you have in hand",
-		Long: `Revoke submits tokens to GitHub's credential revocation endpoint. It needs
-no authentication -- it is meant for whoever finds a leaked token -- and
-GitHub notifies the owner of every revocation.
+		Short: "Ask the provider to revoke tokens you have in hand",
+		Long: `Revoke submits each token to its provider's revocation endpoint. GitHub
+tokens go to the unauthenticated credential revocation endpoint -- it is
+meant for whoever finds a leaked token -- and GitHub notifies the owner.
+Slack tokens go to auth.revoke, authenticated with the token itself.
 
 Tokens are read from the arguments, or from standard input when there are
 none, so a value never has to touch the shell history:
@@ -30,9 +32,11 @@ none, so a value never has to touch the shell history:
   patty revoke < leaked.txt
   patty . --show-secrets --json | jq -r '.results[].findings[].token' | patty revoke
 
-Anything that is not a well-formed GitHub token is ignored. Personal access
+Anything that is not a well-formed token is ignored. GitHub personal access
 tokens (classic and fine-grained), OAuth tokens, user-to-server and refresh
-tokens can be revoked; installation tokens (ghs_) cannot.`,
+tokens can be revoked, as can Slack bot, user and refresh tokens. GitHub
+installation tokens, Slack app-level and configuration tokens and webhooks
+cannot; the report says where to revoke those by hand.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.yes = yes
@@ -54,27 +58,27 @@ func runRevoke(cmd *cobra.Command, args []string) error {
 	}
 	tokens := parseTokens(input)
 	if len(tokens) == 0 {
-		return errors.New("no GitHub tokens in the input")
+		return errors.New("no tokens in the input")
 	}
 	var findings []scan.Finding
 	for _, tok := range tokens {
-		if !detect.Revocable(tok.Kind) {
-			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "skipping %s (%s): %s tokens cannot be revoked through the API\n", detect.Redact(tok.Value), tok.Fingerprint(), tok.Kind)
+		if !registry.Revocable(tok.Kind) {
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "skipping %s (%s): %s credentials cannot be revoked through the API\n", detect.Redact(tok.Value), tok.Fingerprint(), tok.Kind)
 			continue
 		}
-		findings = append(findings, scan.Finding{Kind: tok.Kind, Fingerprint: tok.Fingerprint(), Token: tok.Value, Redacted: detect.Redact(tok.Value), ChecksumVerified: tok.ChecksumVerified})
+		findings = append(findings, *scan.NewFinding(registry, tok))
 	}
 	if len(findings) == 0 {
 		return errors.New("nothing to revoke")
 	}
 	results := []scan.Result{{Target: "input", Findings: findings}}
-	if err := revoke(cmd, results, findings, detect.NewVerifier()); err != nil {
+	if err := revoke(cmd, results, findings); err != nil {
 		return err
 	}
 	for _, f := range results[0].Findings {
 		state := "revoked"
 		if f.Revocation == scan.RevocationPending {
-			state = "pending: GitHub is still processing it"
+			state = "pending: " + f.Provider + " is still processing it"
 		}
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s  %-24s fp %s  %s\n", f.Redacted, f.Kind, f.Fingerprint, state)
 	}
@@ -85,7 +89,7 @@ func runRevoke(cmd *cobra.Command, args []string) error {
 func parseTokens(input string) []detect.Token {
 	var out []detect.Token
 	seen := map[string]bool{}
-	for _, tok := range detect.Find([]byte(input)) {
+	for _, tok := range registry.Find([]byte(input)) {
 		if !seen[tok.Value] {
 			seen[tok.Value] = true
 			out = append(out, tok)
@@ -94,19 +98,19 @@ func parseTokens(input string) []detect.Token {
 	return out
 }
 
-// revokeActive revokes every active token in results after confirmation.
-func revokeActive(cmd *cobra.Command, results []scan.Result, verifier *detect.Verifier) error {
-	tokens := scan.Revocable(results)
+// revokeActive revokes every active credential in results after confirmation.
+func revokeActive(cmd *cobra.Command, results []scan.Result) error {
+	tokens := scan.Revocable(results, registry)
 	if len(tokens) == 0 {
-		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "No active tokens to revoke")
+		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "No active credentials to revoke")
 		return nil
 	}
-	return revoke(cmd, results, tokens, verifier)
+	return revoke(cmd, results, tokens)
 }
 
-func revoke(cmd *cobra.Command, results []scan.Result, tokens []scan.Finding, verifier *detect.Verifier) error {
+func revoke(cmd *cobra.Command, results []scan.Result, tokens []scan.Finding) error {
 	stderr := cmd.ErrOrStderr()
-	_, _ = fmt.Fprintf(stderr, "\nAbout to ask GitHub to revoke %d %s; the owner of each will be notified:\n", len(tokens), report.Plural(len(tokens), "token", "tokens"))
+	_, _ = fmt.Fprintf(stderr, "\nAbout to ask %s to revoke %d %s:\n", providerNames(tokens), len(tokens), report.Plural(len(tokens), "credential", "credentials"))
 	for _, f := range tokens {
 		line := fmt.Sprintf("  %s  %-24s fp %s", f.Redacted, f.Kind, f.Fingerprint)
 		if f.Verification != nil && f.Verification.Detail != "" {
@@ -115,6 +119,9 @@ func revoke(cmd *cobra.Command, results []scan.Result, tokens []scan.Finding, ve
 		_, _ = fmt.Fprintln(stderr, line)
 		for _, w := range warnings(f) {
 			_, _ = fmt.Fprintln(stderr, "      "+w)
+		}
+		if note := rehearse(cmd, f); note != "" {
+			_, _ = fmt.Fprintln(stderr, "      "+note)
 		}
 	}
 	ok, err := confirm(cmd, "Proceed? [y/N] ")
@@ -125,11 +132,11 @@ func revoke(cmd *cobra.Command, results []scan.Result, tokens []scan.Finding, ve
 		_, _ = fmt.Fprintln(stderr, "Not revoking anything")
 		return nil
 	}
-	done, err := scan.Revoke(cmd.Context(), results, tokens, detect.NewRevoker(), verifier)
+	done, err := scan.Revoke(cmd.Context(), results, tokens, registry)
 	if err != nil {
 		return err
 	}
-	msg := fmt.Sprintf("GitHub accepted the revocation of %d %s", len(tokens), report.Plural(len(tokens), "token", "tokens"))
+	msg := fmt.Sprintf("Revocation of %d %s accepted", len(tokens), report.Plural(len(tokens), "credential", "credentials"))
 	if done < len(tokens) {
 		msg += fmt.Sprintf("; %d still answered as active and should go quiet shortly", len(tokens)-done)
 	}
@@ -137,18 +144,49 @@ func revoke(cmd *cobra.Command, results []scan.Result, tokens []scan.Finding, ve
 	return nil
 }
 
-// warnings names the side effects of revoking this token that are easy to
-// miss: an OAuth revocation takes the application's whole authorization with
-// it, and a token still configured locally logs that tool out.
+// providerNames lists the providers of the given credentials: "GitHub",
+// "GitHub and Slack".
+func providerNames(tokens []scan.Finding) string {
+	seen := map[string]bool{}
+	var names []string
+	for _, f := range tokens {
+		if !seen[f.Provider] {
+			seen[f.Provider] = true
+			names = append(names, f.Provider)
+		}
+	}
+	sort.Strings(names)
+	if len(names) > 1 {
+		return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+	}
+	return strings.Join(names, "")
+}
+
+// rehearse asks a provider that supports it how the revocation would go,
+// without revoking anything, so the answer is on the screen before the user
+// confirms. Providers without a dry run contribute nothing.
+func rehearse(cmd *cobra.Command, f scan.Finding) string {
+	dr, ok := registry.Provider(f.Kind).(detect.DryRunRevoker)
+	if !ok {
+		return ""
+	}
+	if err := dr.DryRunRevoke(cmd.Context(), f.Token); err != nil {
+		return "dry run: " + err.Error()
+	}
+	return "dry run: " + f.Provider + " would accept the revocation"
+}
+
+// warnings names the side effects of revoking this credential that are easy
+// to miss: an OAuth revocation takes the application's whole authorization
+// with it, and a token still configured locally logs that tool out.
 func warnings(f scan.Finding) []string {
 	var out []string
-	switch f.Kind {
-	case detect.KindOAuth, detect.KindUserToServer, detect.KindRefresh:
+	if effect := registry.Info(f.Kind).RevokeEffect; effect != "" {
 		app := "this application"
 		if f.Verification != nil && f.Verification.Issuer() != "" {
 			app = f.Verification.Issuer()
 		}
-		out = append(out, fmt.Sprintf("warning: revokes the whole authorization of %s, every token it holds for this user, including current logins", app))
+		out = append(out, "warning: "+strings.ReplaceAll(effect, "{app}", app))
 	}
 	if len(f.Local) > 0 {
 		out = append(out, "warning: still configured in "+strings.Join(f.Local, ", ")+"; that tool stops working until it gets a new token")

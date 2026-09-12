@@ -1,9 +1,10 @@
-// Package localcreds finds the GitHub tokens configured on this machine, so
-// a report can say that a leaked token is not just out there but still in
-// use right here.
+// Package localcreds finds the credentials configured on this machine, so a
+// report can say that a leaked token is not just out there but still in use
+// right here.
 //
-// Only fingerprints leave this package; token values are hashed as soon as
-// they are read.
+// Each provider says where its tools keep tokens; the working directory's
+// .env files are checked for every provider. Only fingerprints leave this
+// package; token values are hashed as soon as they are read.
 package localcreds
 
 import (
@@ -25,36 +26,18 @@ type Credential struct {
 	Source string
 }
 
-// Env vars CLIs read tokens from.
-var envVars = []string{"GITHUB_TOKEN", "GH_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"}
+// cwdFiles are the files in the working directory that hold credentials of
+// any provider. Globs are allowed.
+var cwdFiles = []string{".env", ".env.*", ".envrc", ".npmrc"}
 
-// Files under the config dir, the home dir and the working directory that
-// tools store tokens in. Globs are allowed.
-var (
-	configFiles = []string{
-		"gh/hosts.yml",
-		"hub",
-		"github-copilot/hosts.json",
-		"github-copilot/apps.json",
-		"git/credentials",
-	}
-	homeFiles = []string{
-		".git-credentials",
-		".netrc",
-		".gitconfig",
-		".config/gh/hosts.yml",
-	}
-	cwdFiles = []string{".env", ".env.*", ".envrc", ".npmrc"}
-)
-
-// Find returns every GitHub token configured on this machine that patty
-// knows where to look for. Missing files and failing commands are simply
-// not credentials; Find never returns an error.
-func Find(ctx context.Context) []Credential {
+// Find returns every credential configured on this machine that the
+// registry's providers know where to look for. Missing files and failing
+// commands are simply not credentials; Find never returns an error.
+func Find(ctx context.Context, registry *detect.Registry) []Credential {
 	seen := map[string]bool{}
 	var out []Credential
 	add := func(content []byte, source string) {
-		for _, tok := range detect.Find(content) {
+		for _, tok := range registry.Find(content) {
 			fp := tok.Fingerprint()
 			if !seen[fp+source] {
 				seen[fp+source] = true
@@ -62,21 +45,30 @@ func Find(ctx context.Context) []Credential {
 			}
 		}
 	}
-	for _, name := range envVars {
-		if v := os.Getenv(name); v != "" {
-			add([]byte(v), "$"+name)
+	var sources []detect.LocalSources
+	for _, p := range registry.Providers() {
+		sources = append(sources, p.LocalSources())
+	}
+	for _, s := range sources {
+		for _, name := range s.Env {
+			if v := os.Getenv(name); v != "" {
+				add([]byte(v), "$"+name)
+			}
 		}
 	}
-	for _, path := range candidateFiles() {
+	for _, path := range candidateFiles(sources) {
 		if content, err := os.ReadFile(path); err == nil {
 			add(content, display(path))
 		}
 	}
-	// gh may keep its token in the system keyring rather than hosts.yml.
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if out, err := exec.CommandContext(ctx, "gh", "auth", "token").Output(); err == nil {
-		add(out, "gh auth token")
+	for _, s := range sources {
+		for _, argv := range s.Commands {
+			if out, err := exec.CommandContext(ctx, argv[0], argv[1:]...).Output(); err == nil {
+				add(out, strings.Join(argv, " "))
+			}
+		}
 	}
 	return out
 }
@@ -91,16 +83,19 @@ func Match(creds []Credential) map[string][]string {
 	return m
 }
 
-func candidateFiles() []string {
+func candidateFiles(sources []detect.LocalSources) []string {
 	var paths []string
-	if dir := configDir(); dir != "" {
-		for _, f := range configFiles {
-			paths = append(paths, filepath.Join(dir, f))
+	config, home := configDir(), homeDir()
+	for _, s := range sources {
+		if config != "" {
+			for _, f := range s.ConfigFiles {
+				paths = append(paths, filepath.Join(config, f))
+			}
 		}
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		for _, f := range homeFiles {
-			paths = append(paths, filepath.Join(home, f))
+		if home != "" {
+			for _, f := range s.HomeFiles {
+				paths = append(paths, filepath.Join(home, f))
+			}
 		}
 	}
 	for _, pattern := range cwdFiles {
@@ -123,13 +118,21 @@ func candidateFiles() []string {
 	return uniq
 }
 
+func homeDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return home
+}
+
 // configDir follows the XDG convention gh, hub and Copilot use on every
 // platform, rather than os.UserConfigDir which points elsewhere on macOS.
 func configDir() string {
 	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
 		return dir
 	}
-	if home, err := os.UserHomeDir(); err == nil {
+	if home := homeDir(); home != "" {
 		return filepath.Join(home, ".config")
 	}
 	return ""
@@ -137,7 +140,7 @@ func configDir() string {
 
 // display shortens a path under the home directory to ~/....
 func display(path string) string {
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
+	if home := homeDir(); home != "" {
 		if rel, err := filepath.Rel(home, path); err == nil && !strings.HasPrefix(rel, "..") {
 			return "~/" + filepath.ToSlash(rel)
 		}

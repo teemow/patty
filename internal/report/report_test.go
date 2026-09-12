@@ -8,9 +8,14 @@ import (
 	"testing"
 
 	"github.com/teemow/patty/internal/detect"
+	"github.com/teemow/patty/internal/detect/github"
+	"github.com/teemow/patty/internal/detect/providers"
+	"github.com/teemow/patty/internal/detect/slack"
 	"github.com/teemow/patty/internal/gitrepo"
 	"github.com/teemow/patty/internal/scan"
 )
+
+var registry = providers.Default()
 
 func sample() []scan.Result {
 	active := &detect.Verification{Status: detect.StatusActive, Detail: "user patty"}
@@ -19,9 +24,9 @@ func sample() []scan.Result {
 		{
 			Target: "acme/app",
 			Findings: []scan.Finding{
-				{Kind: detect.KindOAuth, Fingerprint: "bbbb", Token: "gho_SECRET", Redacted: "gho_S…T", ChecksumVerified: true,
+				{Provider: "GitHub", Kind: github.KindOAuth, Fingerprint: "bbbb", Token: "gho_SECRET", Redacted: "gho_S…T", ChecksumVerified: true,
 					Locations: []scan.Location{{Repo: "acme/app", Path: "deploy.sh", Line: 3, ObjectType: "blob", Commit: commit, Refs: []string{"refs/heads/main", "refs/pull/7/head", "refs/pull/7/merge", "refs/tags/v1"}}}},
-				{Kind: detect.KindPAT, Fingerprint: "aaaa", Token: "ghp_SECRET", Redacted: "ghp_S…T", ChecksumVerified: true, Verification: active,
+				{Provider: "GitHub", Kind: github.KindPAT, Fingerprint: "aaaa", Token: "ghp_SECRET", Redacted: "ghp_S…T", ChecksumVerified: true, Verification: active,
 					Locations: []scan.Location{{Repo: "acme/app", Path: ".env", Line: 1, ObjectType: "blob", Commit: commit, Orphaned: true, Rewrite: "force-pushed away from main on 2026-09-10"}}},
 			},
 			Stats: scan.Stats{Scanned: 10, Bytes: 2048},
@@ -29,7 +34,7 @@ func sample() []scan.Result {
 		{
 			Target: "acme/lib",
 			Findings: []scan.Finding{
-				{Kind: detect.KindPAT, Fingerprint: "aaaa", Token: "ghp_SECRET", Redacted: "ghp_S…T", ChecksumVerified: true, Verification: active,
+				{Provider: "GitHub", Kind: github.KindPAT, Fingerprint: "aaaa", Token: "ghp_SECRET", Redacted: "ghp_S…T", ChecksumVerified: true, Verification: active,
 					Locations: []scan.Location{{Repo: "acme/lib", ObjectType: "commit", Commit: commit, Refs: []string{"refs/heads/dev"}}}},
 			},
 		},
@@ -44,7 +49,7 @@ func TestTextMergesAcrossReposAndRedacts(t *testing.T) {
 	if strings.Contains(out, "SECRET") {
 		t.Fatalf("secrets must be redacted:\n%s", out)
 	}
-	if !strings.Contains(out, "2 GitHub tokens found (1 active)") || !strings.Contains(out, "in 3 repositories, 1 skipped") {
+	if !strings.Contains(out, "2 credentials found (1 active)") || !strings.Contains(out, "in 3 repositories, 1 skipped") {
 		t.Fatalf("header wrong:\n%s", out)
 	}
 	// The active token comes first and lists both repositories.
@@ -65,14 +70,14 @@ func TestTextMergesAcrossReposAndRedacts(t *testing.T) {
 
 	buf.Reset()
 	Text(&buf, nil, Options{})
-	if !strings.Contains(buf.String(), "No GitHub tokens found") {
+	if !strings.Contains(buf.String(), "No credentials found") {
 		t.Fatal("empty report")
 	}
 }
 
 func TestStatusLine(t *testing.T) {
 	rs := sample()
-	if s := StatusLine(rs[0], Options{}); !strings.HasPrefix(s, "! acme/app") || !strings.Contains(s, "2 tokens") {
+	if s := StatusLine(rs[0], Options{}); !strings.HasPrefix(s, "! acme/app") || !strings.Contains(s, "2 credentials") {
 		t.Fatalf("findings line: %q", s)
 	}
 	if s := StatusLine(rs[2], Options{}); !strings.HasPrefix(s, "– acme/huge") || !strings.Contains(s, "skipped: disk budget") {
@@ -144,22 +149,48 @@ func TestTextIssuerLocalAndRemediation(t *testing.T) {
 
 func TestRemediationStates(t *testing.T) {
 	loc := []scan.Location{{Repo: "r", Commit: &gitrepo.Commit{}, Refs: []string{"refs/pull/1/head"}}}
-	revoked := scan.Finding{Kind: detect.KindPAT, Verification: &detect.Verification{Status: detect.StatusRevoked}, Local: []string{"~/.config/hub"}, Locations: loc}
-	if steps := Remediation(revoked); len(steps) != 0 {
+	revoked := scan.Finding{Kind: github.KindPAT, Verification: &detect.Verification{Status: detect.StatusRevoked}, Local: []string{"~/.config/hub"}, Locations: loc}
+	if steps := Remediation(revoked, registry); len(steps) != 0 {
 		t.Fatalf("revoked token needs nothing, got %+v", steps)
 	}
-	done := scan.Finding{Kind: detect.KindPAT, Revocation: scan.RevocationDone, Verification: &detect.Verification{Status: detect.StatusRevoked}, Locations: loc}
-	if steps := Remediation(done); len(steps) != 1 || steps[0].Text != "done, GitHub has notified the owner" {
+	done := scan.Finding{Kind: slack.KindBot, Revocation: scan.RevocationDone, Verification: &detect.Verification{Status: detect.StatusRevoked}, Locations: loc}
+	if steps := Remediation(done, registry); len(steps) != 1 || steps[0].Text != "done, Slack rejects it now" {
 		t.Fatalf("done: %+v", steps)
 	}
-	pending := scan.Finding{Kind: detect.KindPAT, Revocation: scan.RevocationPending, Verification: &detect.Verification{Status: detect.StatusActive}, Locations: loc}
-	steps := Remediation(pending)
+	pending := scan.Finding{Kind: github.KindPAT, Revocation: scan.RevocationPending, Verification: &detect.Verification{Status: detect.StatusActive}, Locations: loc}
+	steps := Remediation(pending, registry)
 	if len(steps) != 2 || !strings.HasPrefix(steps[0].Text, "GitHub accepted the revocation") || steps[1].Label != "history" || !strings.Contains(steps[1].Text, "r: only in pull request refs (GitHub Support has to purge those)") {
 		t.Fatalf("pending: %+v", steps)
 	}
-	app := scan.Finding{Kind: detect.KindServerToServer, Verification: &detect.Verification{Status: detect.StatusActive}}
-	if steps := Remediation(app); len(steps) != 1 || !strings.Contains(steps[0].Text, "installation tokens expire within an hour") || strings.Contains(steps[0].Text, "--revoke") {
+	app := scan.Finding{Kind: github.KindServerToServer, Verification: &detect.Verification{Status: detect.StatusActive}}
+	if steps := Remediation(app, registry); len(steps) != 1 || steps[0].Text != "at https://github.com/settings/installations; installation tokens expire within an hour anyway" {
 		t.Fatalf("installation token: %+v", steps)
+	}
+	hook := scan.Finding{Kind: slack.KindWebhook, Verification: &detect.Verification{Status: detect.StatusActive}}
+	if steps := Remediation(hook, registry); len(steps) != 1 || steps[0].Text != "at https://api.slack.com/apps; webhooks are removed under the app's Incoming Webhooks, or in Workflow Builder for workflow webhooks" {
+		t.Fatalf("webhook: %+v", steps)
+	}
+	bot := scan.Finding{Kind: slack.KindBot, Verification: &detect.Verification{Status: detect.StatusActive}}
+	if steps := Remediation(bot, registry); len(steps) != 1 || steps[0].Text != "at https://api.slack.com/apps; or run again with --revoke" {
+		t.Fatalf("bot: %+v", steps)
+	}
+}
+
+func TestTextShowsAttributionPerProvider(t *testing.T) {
+	rs := []scan.Result{{Target: "acme/ops", Findings: []scan.Finding{
+		{Provider: "Slack", Kind: slack.KindBot, Fingerprint: "cccc", Token: "xoxb-SECRET", Redacted: "xoxb-S…T", Attribution: "team 1234567890, bot 1234567890123",
+			Locations: []scan.Location{{Repo: "acme/ops", Path: "bot.env", Line: 2, ObjectType: "blob", Commit: &gitrepo.Commit{SHA: "abcdef0123456789", Date: "2026-09-10T11:47:06+02:00"}, Refs: []string{"refs/heads/main"}}}},
+	}}}
+	var buf bytes.Buffer
+	Text(&buf, rs, Options{})
+	out := buf.String()
+	for _, want := range []string{"1 credential found", "slack-bot-token", "team 1234567890, bot 1234567890123", "(shape match, no checksum)", "↳ revoke   if it is still valid, at https://api.slack.com/apps; or with --verify --revoke"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "SECRET") {
+		t.Fatalf("secrets must be redacted:\n%s", out)
 	}
 }
 

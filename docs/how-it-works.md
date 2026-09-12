@@ -23,33 +23,41 @@ Local targets skip steps 1 and 2 and scan the object database as it is, reflog a
 
 ## Detection
 
-patty looks for GitHub's token families:
+Detection, verification and revocation are organised per **provider**; each provider knows its own token formats, its API and where its tools keep tokens on a developer machine. patty ships with two:
 
-| Prefix | Kind | Verified offline |
-|--------|------|------------------|
-| `ghp_` | personal access token (classic) | checksum |
-| `gho_` | OAuth access token | checksum |
-| `ghu_` | GitHub App user-to-server token | checksum |
-| `ghs_` | GitHub App installation token | checksum |
-| `ghr_` | GitHub App refresh token | checksum |
-| `github_pat_` | fine-grained personal access token | shape only |
+| Provider | Prefix | Kind | Verified offline |
+|----------|--------|------|------------------|
+| GitHub | `ghp_` | personal access token (classic) | checksum |
+| GitHub | `gho_` | OAuth access token | checksum |
+| GitHub | `ghu_` | GitHub App user-to-server token | checksum |
+| GitHub | `ghs_` | GitHub App installation token | checksum |
+| GitHub | `ghr_` | GitHub App refresh token | checksum |
+| GitHub | `github_pat_` | fine-grained personal access token | shape only |
+| Slack | `xoxb-` | bot token | shape; names team and bot id |
+| Slack | `xoxp-` | user token | shape; names team and user id |
+| Slack | `xapp-1-` | app-level token | shape; names the app id |
+| Slack | `xoxe-1-` | refresh token | shape only |
+| Slack | `xoxe.xoxb-1-`, `xoxe.xoxp-1-` | configuration or rotating access token | shape only |
+| Slack | `https://hooks.slack.com/services/`, `/workflows/`, `/triggers/` | incoming webhook URL | shape; names the team id |
 
-The classic families carry a [CRC32 checksum](https://github.blog/engineering/platform-security/behind-githubs-new-authentication-token-formats/) in their last six characters, Base62-encoded. patty recomputes it: a string with the right prefix and length but a wrong checksum is not a token and is not reported. That removes the false positives a pure regex match has to live with -- a `ghp_` followed by 36 random alphanumerics in a test fixture, a hash, a minified bundle -- and is why the report needs no allow-list to stay readable. The fine-grained format does not have a documented checksum, so it is matched on its shape (`github_pat_`, 22 characters, `_`, 59 characters) and best confirmed with `--verify`.
+The classic GitHub families carry a [CRC32 checksum](https://github.blog/engineering/platform-security/behind-githubs-new-authentication-token-formats/) in their last six characters, Base62-encoded. patty recomputes it: a string with the right prefix and length but a wrong checksum is not a token and is not reported. That removes the false positives a pure regex match has to live with -- a `ghp_` followed by 36 random alphanumerics in a test fixture, a hash, a minified bundle -- and is why the report needs no allow-list to stay readable. The fine-grained format does not have a documented checksum, so it is matched on its shape (`github_pat_`, 22 characters, `_`, 59 characters) and best confirmed with `--verify`.
 
-The scan itself is two substring searches per object (for `gh` and `github_pat_`) with an exact shape and checksum check at each candidate. It runs at about 1 GB/s per core; `git` decompressing objects is the bottleneck, which is why the readers run in parallel.
+Slack tokens have no checksum, but their shapes are strict: fixed-length numeric ids separated by dashes and a secret of a fixed length and alphabet, and a webhook URL has a fixed host, route and id layout. The numeric ids are the workspace (team) and the user or bot the token was issued to, so the report can attribute a Slack token without contacting Slack.
+
+The scan itself is a handful of substring searches per object (`gh`, `github_pat_`, `xoxb-`, `xoxp-`, `xapp-1-`, `xoxe`, `https://hooks.slack.com/`) with an exact shape and, where there is one, checksum check at each candidate. It runs at about 1 GB/s per core; `git` decompressing objects is the bottleneck, which is why the readers run in parallel.
 
 ## Compared with gitleaks
 
-[gitleaks](https://github.com/gitleaks/gitleaks) is a general secret scanner with more than 200 rules, allow-lists, baselines and CI integrations. patty is a narrow tool with one question: *is there a GitHub token anywhere in this repository's past?* Where they overlap the differences are:
+[gitleaks](https://github.com/gitleaks/gitleaks) is a general secret scanner with more than 200 rules, allow-lists, baselines and CI integrations. patty is a narrow tool with one question: *is there a GitHub or Slack token anywhere in this repository's past?* Where they overlap the differences are:
 
 | | gitleaks `git` | patty |
 |---|---|---|
 | History covered | commits reachable from refs (`git log -p --all`) | every object in the database, plus `refs/pull/*` and force-pushed or deleted commits fetched from GitHub |
 | Unit of work | each commit's diff; content that appears in many commits is scanned as often | each object once |
-| GitHub tokens | regex + entropy | regex + checksum verification, optional live check |
+| GitHub and Slack tokens | regex + entropy | exact shape + checksum where the format has one, optional live check |
 | Where it points | commit and file of each occurrence | oldest introducing commit, all refs that still contain it, and how orphaned commits went unreachable |
 | Scope | one repository or directory | any number of repositories, whole owners, with a disk budget |
-| Everything else | AWS, Slack, Stripe, private keys, ... | GitHub tokens only |
+| Everything else | AWS, Stripe, private keys, ... | GitHub and Slack credentials only |
 
 Use both: gitleaks in CI on every push, patty when you want to know what is already out there.
 

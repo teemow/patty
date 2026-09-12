@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/teemow/patty/internal/detect"
+	"github.com/teemow/patty/internal/detect/providers"
 	"github.com/teemow/patty/internal/scan"
 )
 
@@ -19,6 +20,16 @@ type Options struct {
 	ShowSecrets bool
 	// AllRefs lists every ref a commit is on instead of the first few.
 	AllRefs bool
+	// Providers answers where a credential of each kind is revoked; nil
+	// means every provider patty ships with.
+	Providers *detect.Registry
+}
+
+func (o Options) providers() *detect.Registry {
+	if o.Providers != nil {
+		return o.Providers
+	}
+	return providers.Default()
 }
 
 // refLimit is how many refs a location line names before "+N more".
@@ -67,7 +78,7 @@ func StatusLine(r scan.Result, o Options) string {
 	}
 	line := fmt.Sprintf("%s %-32s %s", o.paint(color, mark), r.Target, o.paint(dim, scan.Describe(r)))
 	if n := len(r.Findings); n > 0 {
-		line += " · " + o.paint(bold+red, fmt.Sprintf("%d %s", n, Plural(n, "token", "tokens")))
+		line += " · " + o.paint(bold+red, fmt.Sprintf("%d %s", n, Plural(n, "credential", "credentials")))
 	}
 	for _, note := range r.Notes {
 		line += "\n  " + o.paint(yellow, "note: "+note)
@@ -75,19 +86,20 @@ func StatusLine(r scan.Result, o Options) string {
 	return line
 }
 
-// Text writes the final report: every distinct token with all the places
-// it was found, followed by a summary line.
+// Text writes the final report: every distinct credential with all the
+// places it was found, followed by a summary line.
 func Text(w io.Writer, results []scan.Result, o Options) {
 	p := printer{w}
 	findings := scan.Merge(results)
 	s := scan.Summarize(results)
+	registry := o.providers()
 
 	if len(findings) == 0 {
-		p.f("\n%s %s\n", o.paint(green+bold, "No GitHub tokens found"), o.paint(dim, footer(s)))
+		p.f("\n%s %s\n", o.paint(green+bold, "No credentials found"), o.paint(dim, footer(s)))
 		return
 	}
 
-	head := fmt.Sprintf("%d GitHub %s found", len(findings), Plural(len(findings), "token", "tokens"))
+	head := fmt.Sprintf("%d %s found", len(findings), Plural(len(findings), "credential", "credentials"))
 	if s.Active > 0 {
 		head += o.paint(red+bold, fmt.Sprintf(" (%d active)", s.Active))
 	}
@@ -109,6 +121,9 @@ func Text(w io.Writer, results []scan.Result, o Options) {
 			}
 		}
 		p.f("\n%s %-10s %-24s %s  %s", o.paint(color, "●"), o.paint(color, state), f.Kind, o.paint(bold, value), o.paint(dim, "fp "+f.Fingerprint))
+		if f.Attribution != "" {
+			p.f("  %s", o.paint(dim, f.Attribution))
+		}
 		if v := f.Verification; v != nil {
 			for _, part := range []string{v.Detail, issuedTo(*v), expires(*v)} {
 				if part != "" {
@@ -136,7 +151,7 @@ func Text(w io.Writer, results []scan.Result, o Options) {
 			p.ln()
 			p.f("    %s  %s\n", strings.Repeat(" ", len(l.Repo)), o.paint(dim, reachability(l, o)))
 		}
-		for _, line := range Remediation(f) {
+		for _, line := range Remediation(f, registry) {
 			p.f("    %s %-8s %s\n", o.paint(color, "↳"), o.paint(bold, line.Label), line.Text)
 		}
 	}
@@ -163,19 +178,20 @@ type Step struct {
 	Text  string
 }
 
-// Remediation says what to do about a token: how to revoke it, where it is
-// still configured on this machine, and what its history needs. A token
-// GitHub already rejects needs nothing.
-func Remediation(f scan.Finding) []Step {
+// Remediation says what to do about a credential: how to revoke it, where it
+// is still configured on this machine, and what its history needs. A
+// credential its provider already rejects needs nothing.
+func Remediation(f scan.Finding, registry *detect.Registry) []Step {
 	var steps []Step
+	provider := registry.ProviderName(f.Kind)
 	switch {
 	case f.Revocation == scan.RevocationPending:
-		steps = append(steps, Step{"revoke", "GitHub accepted the revocation and is still processing it; run again with --verify to confirm"})
+		steps = append(steps, Step{"revoke", provider + " accepted the revocation and is still processing it; run again with --verify to confirm"})
 	case f.Revocation == scan.RevocationDone:
-		steps = append(steps, Step{"revoke", "done, GitHub has notified the owner"})
+		steps = append(steps, Step{"revoke", "done, " + provider + " rejects it now"})
 	case f.Revoked():
 	default:
-		steps = append(steps, Step{"revoke", revokeAdvice(f)})
+		steps = append(steps, Step{"revoke", revokeAdvice(f, registry.Info(f.Kind))})
 	}
 	if len(f.Local) > 0 && !f.Revoked() {
 		steps = append(steps, Step{"local", "still configured in " + strings.Join(f.Local, ", ") + "; replace it there after revoking"})
@@ -188,32 +204,29 @@ func Remediation(f scan.Finding) []Step {
 	return steps
 }
 
-func revokeAdvice(f scan.Finding) string {
-	var s string
-	if page := detect.RevokePage(f.Kind); page != "" {
-		s = "at " + page
-		if f.Verification != nil {
-			if app := f.Verification.App; app != "" {
-				s += " under " + app
-			}
+// revokeAdvice tells where to revoke by hand and, when the API can do it,
+// how to let patty do it; otherwise what the provider's note says instead.
+func revokeAdvice(f scan.Finding, info detect.KindInfo) string {
+	var parts []string
+	if info.RevokePage != "" {
+		s := "at " + info.RevokePage
+		if f.Verification != nil && f.Verification.App != "" {
+			s += " under " + f.Verification.App
 		}
-	}
-	if !f.Active() {
-		s = "if it is still valid, " + s
-	}
-	if detect.Revocable(f.Kind) {
-		if s != "" {
-			s += "; or "
+		if !f.Active() {
+			s = "if it is still valid, " + s
 		}
-		if f.Active() {
-			s += "run again with --revoke"
-		} else {
-			s += "with --verify --revoke"
-		}
-	} else if f.Kind == detect.KindServerToServer {
-		s = "installation tokens expire within an hour; check the app's installation " + s
+		parts = append(parts, s)
 	}
-	return strings.TrimSpace(s)
+	switch {
+	case info.Revocable && f.Active():
+		parts = append(parts, "or run again with --revoke")
+	case info.Revocable:
+		parts = append(parts, "or with --verify --revoke")
+	case info.RevokeNote != "":
+		parts = append(parts, info.RevokeNote)
+	}
+	return strings.Join(parts, "; ")
 }
 
 // historyAdvice summarises, per repository, how a token can be removed from
@@ -369,7 +382,7 @@ type summary struct {
 	Bytes        int64 `json:"bytes"`
 }
 
-// JSON writes results as one JSON document. Token values are redacted
+// JSON writes results as one JSON document. Credential values are redacted
 // unless ShowSecrets is set.
 func JSON(w io.Writer, results []scan.Result, o Options) error {
 	s := scan.Summarize(results)

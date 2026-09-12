@@ -5,13 +5,19 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/teemow/patty/internal/detect"
+	"github.com/teemow/patty/internal/detect/github"
+	"github.com/teemow/patty/internal/detect/slack"
 )
 
-func TestRevoke(t *testing.T) {
+// fakeAPIs serves GitHub's revocation endpoint and Slack's auth.test and
+// auth.revoke from one server; every token but "slow" dies when revoked.
+func fakeAPIs(t *testing.T) (*detect.Registry, *[]string) {
+	t.Helper()
 	var (
 		mu      sync.Mutex
 		revoked = map[string]bool{}
@@ -20,6 +26,7 @@ func TestRevoke(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
+		bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		switch r.URL.Path {
 		case "/credentials/revoke":
 			var body struct{ Credentials []string }
@@ -32,48 +39,67 @@ func TestRevoke(t *testing.T) {
 			}
 			w.WriteHeader(http.StatusAccepted)
 		case "/user":
-			tok := r.Header.Get("Authorization")[len("token "):]
+			tok := strings.TrimPrefix(r.Header.Get("Authorization"), "token ")
 			if revoked[tok] {
 				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
 			_, _ = w.Write([]byte(`{"login":"patty"}`))
+		case "/api/auth.revoke":
+			posted = append(posted, bearer)
+			revoked[bearer] = true
+			_, _ = w.Write([]byte(`{"ok":true,"revoked":true}`))
+		case "/api/auth.test":
+			if revoked[bearer] {
+				_, _ = w.Write([]byte(`{"ok":false,"error":"invalid_auth"}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"ok":true,"team":"acme","user":"bot","bot_id":"B1"}`))
+		default:
+			t.Errorf("unexpected request %s", r.URL.Path)
 		}
 	}))
-	defer srv.Close()
-	revoker := &detect.Revoker{BaseURL: srv.URL, Client: srv.Client()}
-	verifier := &detect.Verifier{BaseURL: srv.URL, Client: srv.Client()}
+	t.Cleanup(srv.Close)
+	gh := &github.Provider{BaseURL: srv.URL, Client: srv.Client()}
+	sl := &slack.Provider{APIURL: srv.URL + "/api", HooksURL: srv.URL, Client: srv.Client()}
+	return detect.NewRegistry(gh, sl), &posted
+}
+
+func TestRevoke(t *testing.T) {
+	registry, posted := fakeAPIs(t)
 	active := &detect.Verification{Status: detect.StatusActive, Detail: "user patty"}
 
 	results := []Result{
 		{Target: "a", Findings: []Finding{
-			{Kind: detect.KindPAT, Fingerprint: "1", Token: "one", Verification: active},
-			{Kind: detect.KindOAuth, Fingerprint: "2", Token: "slow", Verification: active},
-			{Kind: detect.KindServerToServer, Fingerprint: "3", Token: "app", Verification: active},
-			{Kind: detect.KindPAT, Fingerprint: "4", Token: "dead", Verification: &detect.Verification{Status: detect.StatusRevoked}},
+			{Kind: github.KindPAT, Fingerprint: "1", Token: "one", Verification: active},
+			{Kind: github.KindOAuth, Fingerprint: "2", Token: "slow", Verification: active},
+			{Kind: github.KindServerToServer, Fingerprint: "3", Token: "app", Verification: active},
+			{Kind: github.KindPAT, Fingerprint: "4", Token: "dead", Verification: &detect.Verification{Status: detect.StatusRevoked}},
+			{Kind: slack.KindBot, Fingerprint: "5", Token: "bot", Verification: active},
+			{Kind: slack.KindWebhook, Fingerprint: "6", Token: "hook", Verification: active},
 		}},
 		{Target: "b", Findings: []Finding{
-			{Kind: detect.KindPAT, Fingerprint: "1", Token: "one", Verification: active},
+			{Kind: github.KindPAT, Fingerprint: "1", Token: "one", Verification: active},
 		}},
 	}
-	cands := Revocable(results)
-	if len(cands) != 2 || cands[0].Fingerprint != "2" || cands[1].Fingerprint != "1" { // sorted by kind
+	cands := Revocable(results, registry)
+	if len(cands) != 3 || cands[0].Fingerprint != "2" || cands[1].Fingerprint != "1" || cands[2].Fingerprint != "5" { // sorted by kind
 		t.Fatalf("Revocable = %+v", cands)
 	}
 
-	done, err := Revoke(context.Background(), results, cands, revoker, verifier)
-	if err != nil || done != 1 {
+	done, err := Revoke(context.Background(), results, cands, registry)
+	if err != nil || done != 2 {
 		t.Fatalf("Revoke = %d, %v", done, err)
 	}
-	if len(posted) != 2 {
-		t.Fatalf("posted %v", posted)
+	if len(*posted) != 3 {
+		t.Fatalf("posted %v", *posted)
 	}
 	for _, r := range results {
 		for _, f := range r.Findings {
 			switch f.Fingerprint {
-			case "1":
+			case "1", "5":
 				if f.Revocation != RevocationDone || !f.Revoked() {
-					t.Errorf("%s/1: %+v", r.Target, f)
+					t.Errorf("%s/%s: %+v", r.Target, f.Fingerprint, f)
 				}
 			case "2":
 				if f.Revocation != RevocationPending || !f.Active() {
@@ -86,8 +112,17 @@ func TestRevoke(t *testing.T) {
 			}
 		}
 	}
-	if _, err := Revoke(context.Background(), results, []Finding{{Kind: detect.KindServerToServer, Fingerprint: "3", Token: "app"}}, revoker, verifier); err == nil {
-		t.Fatal("installation tokens must be refused before anything is posted")
+	for _, f := range []Finding{
+		{Kind: github.KindServerToServer, Fingerprint: "3", Token: "app"},
+		{Kind: slack.KindWebhook, Fingerprint: "6", Token: "hook"},
+		{Kind: "unknown-kind", Fingerprint: "7", Token: "x"},
+	} {
+		if _, err := Revoke(context.Background(), results, []Finding{f}, registry); err == nil {
+			t.Errorf("%s must be refused before anything is posted", f.Kind)
+		}
+	}
+	if len(*posted) != 3 {
+		t.Fatalf("refused kinds must not reach the API: %v", *posted)
 	}
 }
 
