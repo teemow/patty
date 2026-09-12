@@ -152,3 +152,28 @@ func TestRunLocalTargetAndSummary(t *testing.T) {
 		t.Fatalf("Describe ok = %q", d)
 	}
 }
+
+func TestRemoveMirrorStopsAtCacheRoot(t *testing.T) {
+	root := t.TempDir()
+	mirror := filepath.Join(root, "github.com", "acme", "app.git")
+	sibling := filepath.Join(root, "github.com", "acme", "lib.git")
+	for _, d := range []string{mirror, sibling} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	removeMirror(mirror, root)
+	if _, err := os.Stat(mirror); !os.IsNotExist(err) {
+		t.Fatal("mirror must be removed")
+	}
+	if _, err := os.Stat(sibling); err != nil {
+		t.Fatal("sibling mirror must survive")
+	}
+	removeMirror(sibling, root)
+	if _, err := os.Stat(filepath.Join(root, "github.com")); !os.IsNotExist(err) {
+		t.Fatal("empty host directory must be removed")
+	}
+	if _, err := os.Stat(root); err != nil {
+		t.Fatal("cache root must survive")
+	}
+}

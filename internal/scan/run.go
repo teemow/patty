@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/teemow/patty/internal/disk"
@@ -101,7 +102,7 @@ func runOne(ctx context.Context, t source.Target, opts RunOptions) Result {
 	}
 	defer opts.Cache.Release(path)
 	if !opts.Keep {
-		defer removeMirror(path)
+		defer removeMirror(path, opts.Cache.Dir)
 	}
 
 	var (
@@ -172,11 +173,12 @@ func finish(ctx context.Context, name string, repo *gitrepo.Repo, rewrites []Rew
 }
 
 // removeMirror deletes a mirror and the owner/host directories it leaves
-// empty, so a cache dir never fills with empty folders.
-func removeMirror(path string) {
+// empty below the cache root, so a cache dir never fills with empty folders.
+func removeMirror(path, root string) {
 	_ = os.RemoveAll(path)
-	for dir := filepath.Dir(path); dir != "." && dir != string(filepath.Separator); dir = filepath.Dir(dir) {
-		if os.Remove(dir) != nil { // not empty (or not ours): stop
+	root = filepath.Clean(root)
+	for dir := filepath.Dir(path); dir != root && strings.HasPrefix(dir, root+string(filepath.Separator)); dir = filepath.Dir(dir) {
+		if os.Remove(dir) != nil { // not empty: stop
 			return
 		}
 	}
