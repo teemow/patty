@@ -92,7 +92,7 @@ func projectEntry(proj project) func(json.RawMessage) (entry, error) {
 	}
 }
 
-// Revoke implements detect.Provider by deleting each key through the Admin
+// Revoke implements detect.Revoker by deleting each key through the Admin
 // API, which needs the operator's admin key: OpenAI has no endpoint for
 // reporting a leaked key. Admin keys are found in the organization's admin
 // key list, project and service account keys in the key lists of every

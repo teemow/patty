@@ -8,7 +8,8 @@ import (
 )
 
 // Provider is one credential issuer: it knows the token formats it hands
-// out, how to ask whether one is still live, and how to revoke it.
+// out and how to ask whether one is still live. A provider whose API also
+// revokes credentials implements Revoker.
 //
 // A provider never stores or logs a token value, and never contacts its API
 // from Find.
@@ -24,13 +25,20 @@ type Provider interface {
 	// Only the provider's explicit invalid-credentials answer is reported as
 	// revoked; anything else that is not a clean acceptance is unknown.
 	Verify(ctx context.Context, tok Token) Verification
+	// LocalSources lists where tools keep this provider's credentials on a
+	// developer machine.
+	LocalSources() LocalSources
+}
+
+// Revoker is a Provider whose API revokes credentials. A provider without
+// it has no one to revoke with, age identities and Kubernetes certificates
+// are rotated by their owner, and the Registry treats none of its kinds as
+// revocable, whatever their KindInfo says.
+type Revoker interface {
 	// Revoke asks the provider to revoke the given credentials. A nil error
 	// means every request was accepted; the caller confirms the outcome with
 	// Verify.
 	Revoke(ctx context.Context, tokens []Token) error
-	// LocalSources lists where tools keep this provider's credentials on a
-	// developer machine.
-	LocalSources() LocalSources
 }
 
 // Correlator is a Provider whose credentials unlock content that may sit in
@@ -139,7 +147,7 @@ func Configure(env func(string) string, providers ...Provider) []Provider {
 	return providers
 }
 
-// DryRunRevoker is a Provider whose revocation endpoint can rehearse a
+// DryRunRevoker is a Revoker whose revocation endpoint can rehearse a
 // revocation: it answers as it would for the real request without revoking
 // anything. patty uses it to preview a revocation before asking for
 // confirmation.
@@ -365,9 +373,11 @@ func (r *Registry) Info(kind Kind) KindInfo {
 	return r.kinds[kind]
 }
 
-// Revocable reports whether the kind's provider revokes it through its API.
+// Revocable reports whether the kind's provider revokes it through its API:
+// the kind is marked revocable and its provider is a Revoker.
 func (r *Registry) Revocable(kind Kind) bool {
-	return r.kinds[kind].Revocable
+	_, ok := r.owner[kind].(Revoker)
+	return ok && r.kinds[kind].Revocable
 }
 
 // RevokePage is where the owner revokes a credential of this kind by hand.

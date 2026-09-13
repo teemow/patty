@@ -34,17 +34,24 @@ func Revocable(results []Result, registry *detect.Registry) []Finding {
 	return out
 }
 
+// revoker is a provider whose API revokes its credentials, the only kind
+// Revoke deals with.
+type revoker interface {
+	detect.Provider
+	detect.Revoker
+}
+
 // Revoke asks each credential's provider to revoke it, checks each one
 // again and records the outcome on every finding of that credential in
 // results. It returns the number of credentials the providers confirmed
 // dead. A provider that refuses is reported in the error; the other
 // providers' credentials are still revoked and checked.
 func Revoke(ctx context.Context, results []Result, tokens []Finding, registry *detect.Registry) (int, error) {
-	byProvider := map[detect.Provider][]Finding{}
-	var order []detect.Provider
+	byProvider := map[revoker][]Finding{}
+	var order []revoker
 	for _, f := range tokens {
-		p := registry.Provider(f.Kind)
-		if p == nil || !registry.Revocable(f.Kind) {
+		p, ok := registry.Provider(f.Kind).(revoker)
+		if !ok || !registry.Revocable(f.Kind) {
 			return 0, fmt.Errorf("%s credentials (%s) cannot be revoked through the API", f.Kind, f.Fingerprint)
 		}
 		if _, seen := byProvider[p]; !seen {

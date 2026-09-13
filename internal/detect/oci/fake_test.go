@@ -1,4 +1,4 @@
-package registry
+package oci
 
 import (
 	"encoding/base64"

@@ -17,7 +17,7 @@ import (
 	"github.com/teemow/patty/internal/detect"
 )
 
-// Revoke implements detect.Provider by deactivating each key through
+// Revoke implements detect.Revoker by deactivating each key through
 // iam:UpdateAccessKey, signed with the key itself. AWS has no endpoint for
 // reporting a leaked key, so this is best effort: it works for the key of an
 // IAM user who may manage their own access keys, and says clearly when it

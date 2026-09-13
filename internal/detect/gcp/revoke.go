@@ -10,7 +10,7 @@ import (
 	"github.com/teemow/patty/internal/detect"
 )
 
-// Revoke implements detect.Provider through Google's revoke endpoint, which
+// Revoke implements detect.Revoker through Google's revoke endpoint, which
 // accepts an access or a refresh token from whoever holds it and revokes
 // the grant both belong to; no client secret is needed. A token Google
 // already rejects counts as done, Verify confirms it afterwards. Service

@@ -13,7 +13,7 @@ import (
 // revokeBatch is the most credentials GitHub accepts in one revocation request.
 const revokeBatch = 1000
 
-// Revoke implements detect.Provider through POST /credentials/revoke. The
+// Revoke implements detect.Revoker through POST /credentials/revoke. The
 // endpoint is unauthenticated on purpose: it is meant for whoever finds a
 // token, not only its owner, and GitHub notifies the owner of every
 // revocation. Tokens are submitted in batches the API accepts; GitHub

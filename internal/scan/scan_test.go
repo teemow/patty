@@ -16,8 +16,8 @@ import (
 	"github.com/teemow/patty/internal/detect"
 	"github.com/teemow/patty/internal/detect/aws"
 	"github.com/teemow/patty/internal/detect/github"
+	"github.com/teemow/patty/internal/detect/oci"
 	"github.com/teemow/patty/internal/detect/providers"
-	"github.com/teemow/patty/internal/detect/registry"
 	"github.com/teemow/patty/internal/detect/slack"
 	"github.com/teemow/patty/internal/detect/sops"
 	"github.com/teemow/patty/internal/disk"
@@ -210,7 +210,7 @@ func TestRepoReportsOneLoginPerRegistryHost(t *testing.T) {
 			t.Errorf("%+v", f)
 		}
 	}
-	if res.Findings[0].Kind != registry.KindQuayLogin || res.Findings[0].Token != "quay.io/acme+ci" || res.Findings[1].Token != "registry.example.com/deploy" {
+	if res.Findings[0].Kind != oci.KindQuayLogin || res.Findings[0].Token != "quay.io/acme+ci" || res.Findings[1].Token != "registry.example.com/deploy" {
 		t.Errorf("findings %+v", res.Findings)
 	}
 	if out, _ := json.Marshal(res); strings.Contains(string(out), "hunter2") || strings.Contains(string(out), "robotrobot") {

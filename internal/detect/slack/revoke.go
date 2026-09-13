@@ -9,7 +9,7 @@ import (
 	"github.com/teemow/patty/internal/detect"
 )
 
-// Revoke implements detect.Provider through auth.revoke, one call per
+// Revoke implements detect.Revoker through auth.revoke, one call per
 // token: the token authenticates the request that revokes it. Slack answers
 // `ok: true, revoked: true` and rejects the token from then on; unlike
 // GitHub it does not notify anyone.
