@@ -42,6 +42,8 @@ For GitHub targets patty uses a token from `GITHUB_TOKEN`, `GH_TOKEN`, or the [g
 
 **Anthropic and OpenAI keys:** their APIs cannot revoke a key by itself. To let `--revoke` deactivate a leaked Anthropic API key or delete a leaked OpenAI key, set `ANTHROPIC_ADMIN_KEY` to an [Admin API key](https://console.anthropic.com/settings/admin-keys) of the organization the leaked key belongs to, or `OPENAI_ADMIN_KEY` to an [admin key](https://platform.openai.com/settings/organization/admin-keys) of that organization. With one configured, `--verify` also names each key the way the Console does (name, workspace or project, creator), and `--revoke` deactivates only keys the organization's own key list confirms as its own; a key from another organization is reported as such. Without one, the report says where to revoke by hand. Detection and `--verify` need no admin key.
 
+**Google Cloud:** the file `GOOGLE_APPLICATION_CREDENTIALS` names, `CLOUDSDK_AUTH_ACCESS_TOKEN`, and the credential files gcloud writes under `~/.config/gcloud` are read locally, so the report can say that a leaked service account key or refresh token is still configured on this machine; only fingerprints are compared, and gcloud's `credentials.db` is not opened. Revoking a Google OAuth token with `--revoke` signs out every tool that shares its grant, gcloud included.
+
 The tokens patty finds never leave your machine unless you pass `--verify` or `--revoke`; see [what leaves your machine](docs/report.md#what-leaves-your-machine).
 
 ## Usage
