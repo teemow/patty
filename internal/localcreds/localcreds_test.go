@@ -93,8 +93,17 @@ func TestFind(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// gcloud keeps one credential file per account under a glob, and the
+	// SDKs read whatever GOOGLE_APPLICATION_CREDENTIALS names.
+	adcTok, legacyTok, fileTok := gcpRefresh("Adc-"), gcpRefresh("Leg-"), gcpRefresh("Fil-")
+	write("gcloud/application_default_credentials.json", gcpADC(adcTok))
+	write("gcloud/legacy_credentials/jane@example.com/adc.json", gcpADC(legacyTok))
+	write("gcloud/legacy_credentials/jane@example.com/.boto", "[Credentials]\n")
+	write("keys/deploy.json", gcpADC(fileTok))
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", filepath.Join(cfg, "keys", "deploy.json"))
+
 	got := Match(Find(context.Background(), providers.Default()))
-	if len(got) != 8 {
+	if len(got) != 11 {
 		t.Fatalf("Match = %v", got)
 	}
 	if src := got[detect.Fingerprint("quay.io/acme+ci")]; len(src) != 1 || src[0] != "~/.docker/config.json" {
@@ -121,6 +130,15 @@ func TestFind(t *testing.T) {
 	if src := got[detect.Fingerprint(slackEnv)]; len(src) != 1 || src[0] != "$SLACK_BOT_TOKEN" {
 		t.Errorf("slack env token sources = %v", src)
 	}
+	if src := got[detect.Fingerprint(adcTok)]; len(src) != 1 || src[0] != "~/.config/gcloud/application_default_credentials.json" {
+		t.Errorf("gcloud ADC sources = %v", src)
+	}
+	if src := got[detect.Fingerprint(legacyTok)]; len(src) != 1 || src[0] != "~/.config/gcloud/legacy_credentials/jane@example.com/adc.json" {
+		t.Errorf("gcloud legacy credential sources = %v", src)
+	}
+	if src := got[detect.Fingerprint(fileTok)]; len(src) != 1 || src[0] != "~/.config/keys/deploy.json ($GOOGLE_APPLICATION_CREDENTIALS)" {
+		t.Errorf("GOOGLE_APPLICATION_CREDENTIALS sources = %v", src)
+	}
 	for fp, srcs := range got {
 		for _, s := range srcs {
 			if strings.Contains(s, "gh"+"p_") || strings.Contains(s, "gh"+"o_") || strings.Contains(s, "xoxb"+"-") || strings.Contains(s, "AGE-SECRET") {
@@ -128,6 +146,14 @@ func TestFind(t *testing.T) {
 			}
 		}
 	}
+}
+
+// gcpRefresh builds a Google refresh token at runtime.
+func gcpRefresh(fill string) string { return "1//0" + strings.Repeat(fill, 25) }
+
+// gcpADC is the authorized_user document gcloud writes for an account.
+func gcpADC(refresh string) string {
+	return `{"type":"authorized_user","client_id":"123456789012-abc.apps.googleusercontent.com","client_secret":"d-` + strings.Repeat("s", 24) + `","refresh_token":"` + refresh + `"}`
 }
 
 func mustAbs(t *testing.T, p string) string {

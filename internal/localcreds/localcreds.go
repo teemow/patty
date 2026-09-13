@@ -94,7 +94,9 @@ type candidate struct {
 // candidateFiles lists every file the providers point at, each once. A file
 // named by an environment variable comes first, so that its source says
 // which variable led there when a provider also lists the path itself; a
-// variable may list several files the way KUBECONFIG does.
+// variable may list several files the way KUBECONFIG does. Paths under the
+// config and home directories may be globs, the way gcloud keeps one
+// credential file per account.
 func candidateFiles(sources []detect.LocalSources) []candidate {
 	var cands []candidate
 	config, home := configDir(), homeDir()
@@ -109,14 +111,10 @@ func candidateFiles(sources []detect.LocalSources) []candidate {
 	}
 	for _, s := range sources {
 		if config != "" {
-			for _, f := range s.ConfigFiles {
-				cands = append(cands, candidate{path: filepath.Join(config, f)})
-			}
+			cands = appendGlobs(cands, config, s.ConfigFiles)
 		}
 		if home != "" {
-			for _, f := range s.HomeFiles {
-				cands = append(cands, candidate{path: filepath.Join(home, f)})
-			}
+			cands = appendGlobs(cands, home, s.HomeFiles)
 		}
 	}
 	for _, pattern := range cwdFiles {
@@ -142,6 +140,28 @@ func candidateFiles(sources []detect.LocalSources) []candidate {
 		uniq = append(uniq, c)
 	}
 	return uniq
+}
+
+// appendGlobs adds the files under dir that match each pattern. A pattern
+// without wildcards is kept as it is, whether or not the file exists, so
+// the source names stay predictable; one with wildcards contributes what
+// it matches right now.
+func appendGlobs(cands []candidate, dir string, patterns []string) []candidate {
+	for _, pattern := range patterns {
+		path := filepath.Join(dir, pattern)
+		if !strings.ContainsAny(pattern, "*?[") {
+			cands = append(cands, candidate{path: path})
+			continue
+		}
+		matches, err := filepath.Glob(path)
+		if err != nil {
+			continue
+		}
+		for _, m := range matches {
+			cands = append(cands, candidate{path: m})
+		}
+	}
+	return cands
 }
 
 func homeDir() string {
