@@ -21,7 +21,8 @@ type Options struct {
 	Workers int
 	// MaxObject skips objects larger than this many bytes.
 	MaxObject int64
-	// Ignore holds token fingerprints to leave out of the results.
+	// Ignore holds the token fingerprints and credential kinds to leave out
+	// of the results.
 	Ignore map[string]bool
 	// Providers is the set of credential providers to look for; nil means
 	// every provider patty ships with.
@@ -81,7 +82,10 @@ type Finding struct {
 	ChecksumVerified bool   `json:"checksum_verified"`
 	// Attribution is what the credential's own shape says about its owner,
 	// such as the workspace id in a Slack token; known without --verify.
-	Attribution  string               `json:"attribution,omitempty"`
+	Attribution string `json:"attribution,omitempty"`
+	// Opaque marks secret material of no recognised shape, a plaintext
+	// Kubernetes Secret, which nothing can verify; see detect.KindInfo.
+	Opaque       bool                 `json:"opaque,omitempty"`
 	Verification *detect.Verification `json:"verification,omitempty"`
 	// Revocation records what happened when patty asked the provider to revoke the credential.
 	Revocation Revocation `json:"revocation,omitempty"`
@@ -201,7 +205,7 @@ func Repo(ctx context.Context, name string, repo *gitrepo.Repo, rewrites []Rewri
 				}
 			}
 			for _, tok := range registry.Find(content) {
-				if opts.Ignore[tok.Fingerprint()] {
+				if opts.Ignore[tok.Fingerprint()] || opts.Ignore[string(tok.Kind)] {
 					continue
 				}
 				mu.Lock()
@@ -264,6 +268,7 @@ func NewFinding(registry *detect.Registry, tok detect.Token) *Finding {
 		Redacted:         redacted,
 		ChecksumVerified: tok.ChecksumVerified,
 		Attribution:      tok.Attribution,
+		Opaque:           registry.Info(tok.Kind).Opaque,
 		Secret:           tok.Secret,
 	}
 }
@@ -283,7 +288,9 @@ func (f *Finding) complete(secret, attribution string) {
 	}
 }
 
-// SortFindings orders active credentials first, then by kind and fingerprint.
+// SortFindings orders active credentials first, then the ones nothing has
+// rejected, then opaque material nothing can verify, then the rejected
+// ones; within a group by kind and fingerprint.
 func SortFindings(fs []Finding) {
 	sort.Slice(fs, func(i, j int) bool {
 		if a, b := rank(fs[i]), rank(fs[j]); a != b {
@@ -297,17 +304,18 @@ func SortFindings(fs []Finding) {
 }
 
 func rank(f Finding) int {
-	if f.Verification == nil {
-		return 1
+	if f.Verification != nil {
+		switch f.Verification.Status {
+		case detect.StatusActive:
+			return 0
+		case detect.StatusRevoked:
+			return 3
+		}
 	}
-	switch f.Verification.Status {
-	case detect.StatusActive:
-		return 0
-	case detect.StatusUnknown, detect.StatusUnverifiable:
-		return 1
-	default:
+	if f.Opaque {
 		return 2
 	}
+	return 1
 }
 
 // correlate lists on every finding of a correlating provider the files of

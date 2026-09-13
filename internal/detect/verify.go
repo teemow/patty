@@ -6,7 +6,9 @@ type VerifyStatus string
 const (
 	// StatusActive means the provider accepted the credential: it is live and must be revoked.
 	StatusActive VerifyStatus = "active"
-	// StatusRevoked means the provider explicitly rejected the credential as invalid.
+	// StatusRevoked means the provider explicitly rejected the credential as
+	// invalid, or the credential itself says it can no longer be accepted:
+	// a certificate or token past the expiry it carries.
 	StatusRevoked VerifyStatus = "revoked"
 	// StatusUnverifiable means the credential family cannot be checked without side effects.
 	StatusUnverifiable VerifyStatus = "unverifiable"

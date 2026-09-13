@@ -8,6 +8,7 @@ import (
 	"github.com/teemow/patty/internal/detect/anthropic"
 	"github.com/teemow/patty/internal/detect/aws"
 	"github.com/teemow/patty/internal/detect/github"
+	"github.com/teemow/patty/internal/detect/kubernetes"
 	"github.com/teemow/patty/internal/detect/openai"
 	"github.com/teemow/patty/internal/detect/registry"
 	"github.com/teemow/patty/internal/detect/slack"
@@ -20,6 +21,6 @@ import (
 // the others, so a registry password that is one of their credentials is
 // reported as theirs.
 func Default() *detect.Registry {
-	peers := []detect.Provider{github.New(), slack.New(), aws.New(), sops.New(), anthropic.New(), openai.New()}
+	peers := []detect.Provider{github.New(), slack.New(), aws.New(), sops.New(), anthropic.New(), openai.New(), kubernetes.New()}
 	return detect.NewRegistry(detect.Configure(os.Getenv, append(peers, registry.New(peers...))...)...)
 }

@@ -138,3 +138,51 @@ func mustAbs(t *testing.T, p string) string {
 	}
 	return abs
 }
+
+func TestFindReadsEveryKubeconfigInTheList(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	for _, p := range providers.Default().Providers() {
+		src := p.LocalSources()
+		for _, name := range append(src.Env, src.EnvFiles...) {
+			t.Setenv(name, "")
+		}
+	}
+	t.Setenv("PATH", t.TempDir())
+	t.Chdir(t.TempDir())
+
+	// A kubeconfig is recognised by its kind; a bearer token is enough of
+	// a credential, a certificate would be compared by fingerprint the same way.
+	kubeconfig := func(name, tok string) string {
+		return "apiVersion: v1\nkind: Config\nclusters:\n- name: c\n  cluster:\n    server: https://k8s.example.com:6443\ncontexts:\n- name: c\n  context:\n    cluster: c\n    user: " + name + "\nusers:\n- name: " + name + "\n  user:\n    token: " + tok + "\n"
+	}
+	first, second, home3 := "first-token-"+strings.Repeat("a", 20), "second-token-"+strings.Repeat("b", 20), "home-token-"+strings.Repeat("c", 20)
+	paths := []string{filepath.Join(home, "one.yaml"), filepath.Join(home, "two.yaml")}
+	for i, tok := range []string{first, second} {
+		if err := os.WriteFile(paths[i], []byte(kubeconfig("u", tok)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".kube"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".kube", "config"), []byte(kubeconfig("u", home3)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KUBECONFIG", strings.Join(paths, string(filepath.ListSeparator)))
+
+	got := Match(Find(context.Background(), providers.Default()))
+	if len(got) != 3 {
+		t.Fatalf("Match = %v", got)
+	}
+	if src := got[detect.Fingerprint(first)]; len(src) != 1 || src[0] != "~/one.yaml ($KUBECONFIG)" {
+		t.Errorf("first kubeconfig sources = %v", src)
+	}
+	if src := got[detect.Fingerprint(second)]; len(src) != 1 || src[0] != "~/two.yaml ($KUBECONFIG)" {
+		t.Errorf("second kubeconfig sources = %v", src)
+	}
+	if src := got[detect.Fingerprint(home3)]; len(src) != 1 || src[0] != "~/.kube/config" {
+		t.Errorf("home kubeconfig sources = %v", src)
+	}
+}

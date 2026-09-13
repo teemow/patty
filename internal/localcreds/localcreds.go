@@ -93,14 +93,17 @@ type candidate struct {
 
 // candidateFiles lists every file the providers point at, each once. A file
 // named by an environment variable comes first, so that its source says
-// which variable led there when a provider also lists the path itself.
+// which variable led there when a provider also lists the path itself; a
+// variable may list several files the way KUBECONFIG does.
 func candidateFiles(sources []detect.LocalSources) []candidate {
 	var cands []candidate
 	config, home := configDir(), homeDir()
 	for _, s := range sources {
 		for _, name := range s.EnvFiles {
-			if path := os.Getenv(name); path != "" {
-				cands = append(cands, candidate{path, display(path) + " ($" + name + ")"})
+			for _, path := range filepath.SplitList(os.Getenv(name)) {
+				if path != "" {
+					cands = append(cands, candidate{path, display(path) + " ($" + name + ")"})
+				}
 			}
 		}
 	}
