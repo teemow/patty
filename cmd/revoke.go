@@ -40,7 +40,8 @@ tokens (classic and fine-grained), OAuth tokens, user-to-server and refresh
 tokens can be revoked, as can Slack bot, user and refresh tokens and AWS
 access key pairs. GitHub installation tokens, Slack app-level and
 configuration tokens and webhooks, and temporary AWS keys cannot; the
-report says where to revoke those by hand.`,
+report says where to revoke those by hand. Age identities and PGP keys have
+no one to revoke them with; the report says how to rotate them.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.yes = yes

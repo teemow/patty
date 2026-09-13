@@ -6,13 +6,17 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"filippo.io/age"
 
 	"github.com/teemow/patty/internal/detect"
 	"github.com/teemow/patty/internal/detect/aws"
 	"github.com/teemow/patty/internal/detect/github"
 	"github.com/teemow/patty/internal/detect/slack"
+	"github.com/teemow/patty/internal/detect/sops"
 	"github.com/teemow/patty/internal/disk"
 	"github.com/teemow/patty/internal/gitrepo"
 	"github.com/teemow/patty/internal/source"
@@ -224,5 +228,74 @@ func TestRemoveMirrorStopsAtCacheRoot(t *testing.T) {
 	}
 	if _, err := os.Stat(root); err != nil {
 		t.Fatal("cache root must survive")
+	}
+}
+
+// sopsFixture is a repository with an age identity in keys.txt, a
+// .sops.yaml and one encrypted file that list its recipient, and a second
+// encrypted file and a README that do not count: the README has no sops
+// marker, the file is encrypted to someone else.
+func sopsFixture(t *testing.T) (dir string, id *age.X25519Identity) {
+	t.Helper()
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mine, theirs := id.Recipient().String(), other.Recipient().String()
+	dir = t.TempDir()
+	git(t, dir, "init", "-q", "-b", "main")
+	if err := os.MkdirAll(filepath.Join(dir, "secrets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, "keys.txt"), "# created: 2026-01-01T00:00:00Z\n# public key: "+mine+"\n"+id.String()+"\n")
+	write(t, filepath.Join(dir, ".sops.yaml"), "creation_rules:\n  - path_regex: secrets/.*\n    age: >-\n      "+mine+",\n      "+theirs+"\n")
+	write(t, filepath.Join(dir, "secrets", "db.sops.yaml"), "password: ENC[AES256_GCM,data:abc,iv:def,tag:ghi,type:str]\nsops:\n    age:\n        - recipient: "+mine+"\n          enc: irrelevant\n        - recipient: "+theirs+"\n          enc: irrelevant\n    version: 3.9.0\n")
+	write(t, filepath.Join(dir, "secrets", "other.sops.yaml"), "token: ENC[AES256_GCM,data:abc,iv:def,tag:ghi,type:str]\nsops:\n    age:\n        - recipient: "+theirs+"\n          enc: irrelevant\n    version: 3.9.0\n")
+	write(t, filepath.Join(dir, "README.md"), "Encrypt new secrets to "+mine+".\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "add secrets")
+	return dir, id
+}
+
+func TestRepoCorrelatesIdentitiesWithSopsRecipients(t *testing.T) {
+	ctx := context.Background()
+	dir, id := sopsFixture(t)
+	repo, err := gitrepo.Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, workers := range []int{1, 4} {
+		res, err := Repo(ctx, "fixture", repo, nil, Options{Workers: workers, Verify: true})
+		if err != nil || len(res.Findings) != 1 {
+			t.Fatalf("workers=%d: %d findings, %v", workers, len(res.Findings), err)
+		}
+		f := res.Findings[0]
+		if f.Provider != "sops" || f.Kind != sops.KindAge || !f.ChecksumVerified || f.Attribution != "recipient "+id.Recipient().String() || !f.Unverifiable() {
+			t.Fatalf("workers=%d: %+v", workers, f)
+		}
+		if len(f.Locations) != 1 || f.Locations[0].Path != "keys.txt" || f.Locations[0].Line != 3 {
+			t.Fatalf("locations: %+v", f.Locations)
+		}
+		want := []Unlock{{Repo: "fixture", Path: ".sops.yaml"}, {Repo: "fixture", Path: "secrets/db.sops.yaml"}}
+		if !reflect.DeepEqual(f.Unlocks, want) {
+			t.Fatalf("workers=%d: unlocks %+v, want %+v", workers, f.Unlocks, want)
+		}
+		out, _ := json.Marshal(res)
+		if strings.Contains(string(out), id.String()) || !strings.Contains(string(out), `"unlocks":[{"repo":"fixture","path":".sops.yaml"}`) {
+			t.Fatalf("json: %s", out)
+		}
+	}
+}
+
+func TestMergeKeepsUnlocksOfEveryRepository(t *testing.T) {
+	a := Finding{Kind: sops.KindAge, Fingerprint: "ffff", Unlocks: []Unlock{{Repo: "acme/infra", Path: "a.yaml"}}}
+	b := Finding{Kind: sops.KindAge, Fingerprint: "ffff", Unlocks: []Unlock{{Repo: "acme/app", Path: "b.yaml"}}}
+	merged := Merge([]Result{{Findings: []Finding{a}}, {Findings: []Finding{b}}})
+	if len(merged) != 1 || len(merged[0].Unlocks) != 2 || merged[0].Unlocks[1].Repo != "acme/app" {
+		t.Fatalf("merged %+v", merged)
 	}
 }

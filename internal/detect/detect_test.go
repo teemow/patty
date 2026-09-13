@@ -25,6 +25,28 @@ func (f fake) Verify(context.Context, Token) Verification {
 func (fake) Revoke(context.Context, []Token) error { return nil }
 func (fake) LocalSources() LocalSources            { return LocalSources{} }
 
+// correlating is a fake that also relates its credentials to content.
+type correlating struct{ fake }
+
+func (c correlating) Observe(content []byte) []string {
+	if strings.Contains(string(content), "encrypted to "+c.name) {
+		return []string{c.name + "-public"}
+	}
+	return nil
+}
+func (c correlating) Identifiers(Token) []string { return []string{c.name + "-public"} }
+
+func TestRegistryCorrelators(t *testing.T) {
+	r := NewRegistry(fake{"alpha"}, correlating{fake{"beta"}})
+	cs := r.Correlators()
+	if len(cs) != 1 || cs[0].Observe([]byte("encrypted to beta")) == nil || cs[0].Observe([]byte("plain")) != nil {
+		t.Fatalf("correlators = %+v", cs)
+	}
+	if NewRegistry(fake{"alpha"}).Correlators() != nil {
+		t.Fatal("no correlators must be nil")
+	}
+}
+
 func TestRegistryFindMergesAndNumbersLines(t *testing.T) {
 	r := NewRegistry(fake{"alpha"}, fake{"beta"})
 	got := r.Find([]byte("beta\nx alpha\nbeta"))

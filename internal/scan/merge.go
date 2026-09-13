@@ -1,8 +1,8 @@
 package scan
 
 // Merge groups the findings of all results by credential, so one that
-// leaked into several repositories is one entry with every location. Active
-// credentials come first.
+// leaked into several repositories is one entry with every location and
+// everything it unlocks. Active credentials come first.
 func Merge(results []Result) []Finding {
 	byFP := map[string]*Finding{}
 	var order []string
@@ -12,12 +12,14 @@ func Merge(results []Result) []Finding {
 			if !ok {
 				cp := f
 				cp.Locations = nil
+				cp.Unlocks = nil
 				cp.Occurrences = 0
 				byFP[f.Fingerprint] = &cp
 				m = &cp
 				order = append(order, f.Fingerprint)
 			}
 			m.Locations = append(m.Locations, f.Locations...)
+			m.Unlocks = append(m.Unlocks, f.Unlocks...)
 			m.Occurrences += f.Occurrences
 			m.complete(f.Secret, f.Attribution)
 			if m.Verification == nil {

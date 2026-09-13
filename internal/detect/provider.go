@@ -32,6 +32,23 @@ type Provider interface {
 	LocalSources() LocalSources
 }
 
+// Correlator is a Provider whose credentials unlock content that may sit in
+// the scanned repositories themselves: an age identity decrypts every sops
+// file encrypted to its recipient. The scan shows it every object and asks
+// afterwards what each credential opens, so the report can say how much a
+// leak is worth.
+type Correlator interface {
+	// Observe returns the identifiers under which content names credentials
+	// of this provider (the recipients an encrypted file lists), or nil when
+	// the object is of no interest. It runs on every scanned object and has
+	// to be cheap; it must not keep a reference to content.
+	Observe(content []byte) []string
+	// Identifiers returns what the credential is known as in such content:
+	// the public key of an identity. The scan matches them against what
+	// Observe reported.
+	Identifiers(tok Token) []string
+}
+
 // DryRunRevoker is a Provider whose revocation endpoint can rehearse a
 // revocation: it answers as it would for the real request without revoking
 // anything. patty uses it to preview a revocation before asking for
@@ -59,6 +76,12 @@ type KindInfo struct {
 	// was used while it was exposed, and what the provider does on its own
 	// when it spots the leak. Shown for every finding, revoked or not.
 	AuditNote string
+	// UnlocksLabel labels the advice line that lists what a credential of
+	// this kind opens in the scanned repositories ("decrypts"). Set only for
+	// the kinds of a Correlator.
+	UnlocksLabel string
+	// UnlocksNone is that line when nothing scanned names the credential.
+	UnlocksNone string
 }
 
 // LocalSources names where a provider's credentials are configured on the
@@ -66,6 +89,9 @@ type KindInfo struct {
 type LocalSources struct {
 	// Env lists environment variables tools read the credential from.
 	Env []string
+	// EnvFiles lists environment variables whose value is the path of a
+	// file holding the credential.
+	EnvFiles []string
 	// ConfigFiles are relative to the XDG config directory (~/.config).
 	ConfigFiles []string
 	// HomeFiles are relative to the home directory.
@@ -114,6 +140,18 @@ func (r *Registry) Find(content []byte) []Token {
 		found[i].Line = bytes.Count(content[:found[i].Offset], []byte{'\n'}) + 1
 	}
 	return found
+}
+
+// Correlators returns the registered providers that relate their
+// credentials to the content they unlock, in order.
+func (r *Registry) Correlators() []Correlator {
+	var out []Correlator
+	for _, p := range r.providers {
+		if c, ok := p.(Correlator); ok {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // Provider returns the provider that issues credentials of this kind, or nil.

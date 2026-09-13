@@ -178,12 +178,20 @@ type Step struct {
 	Text  string
 }
 
-// Remediation says what to do about a credential: how to revoke it, where it
-// is still configured on this machine, and what its history needs. A
+// unlockLimit is how many files the unlocks line names per repository
+// before "+N more".
+const unlockLimit = 3
+
+// Remediation says what to do about a credential: what it unlocks in the
+// scanned repositories when its provider can tell, how to revoke it, where
+// it is still configured on this machine, and what its history needs. A
 // credential its provider already rejects needs nothing.
 func Remediation(f scan.Finding, registry *detect.Registry) []Step {
 	var steps []Step
 	provider := registry.ProviderName(f.Kind)
+	if info := registry.Info(f.Kind); info.UnlocksLabel != "" {
+		steps = append(steps, Step{info.UnlocksLabel, unlocksAdvice(f.Unlocks, info.UnlocksNone)})
+	}
 	switch {
 	case f.Revocation == scan.RevocationPending:
 		steps = append(steps, Step{"revoke", provider + " accepted the revocation and is still processing it; run again with --verify to confirm"})
@@ -232,6 +240,29 @@ func revokeAdvice(f scan.Finding, info detect.KindInfo) string {
 		parts = append(parts, info.RevokeNote)
 	}
 	return strings.Join(parts, "; ")
+}
+
+// unlocksAdvice lists, per repository, how many files the credential opens
+// and the first few of them: "acme/infra: 42 files (a.yaml, b.yaml, c.yaml,
+// +39 more) · acme/app: 1 file (secrets.yaml)".
+func unlocksAdvice(unlocks []scan.Unlock, none string) string {
+	if len(unlocks) == 0 {
+		return none
+	}
+	byRepo := map[string][]string{}
+	var repos []string
+	for _, u := range unlocks {
+		if _, ok := byRepo[u.Repo]; !ok {
+			repos = append(repos, u.Repo)
+		}
+		byRepo[u.Repo] = append(byRepo[u.Repo], u.Path)
+	}
+	parts := make([]string, 0, len(repos))
+	for _, repo := range repos {
+		paths := byRepo[repo]
+		parts = append(parts, fmt.Sprintf("%s: %d %s (%s)", repo, len(paths), Plural(len(paths), "file", "files"), join(paths, unlockLimit)))
+	}
+	return strings.Join(parts, " · ")
 }
 
 // historyAdvice summarises, per repository, how a token can be removed from

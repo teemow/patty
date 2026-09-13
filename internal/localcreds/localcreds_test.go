@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"filippo.io/age"
+
 	"github.com/teemow/patty/internal/detect"
 	"github.com/teemow/patty/internal/detect/github"
 	"github.com/teemow/patty/internal/detect/providers"
@@ -22,13 +24,24 @@ func slackBot(secret string) string {
 	return "xoxb-" + "1234567890" + "-" + "1234567890123" + "-" + secret
 }
 
+// ageIdentity generates an age identity at runtime.
+func ageIdentity(t *testing.T) *age.X25519Identity {
+	t.Helper()
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
 func TestFind(t *testing.T) {
 	home := t.TempDir()
 	cfg := filepath.Join(home, ".config")
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", cfg)
 	for _, p := range providers.Default().Providers() {
-		for _, name := range p.LocalSources().Env {
+		src := p.LocalSources()
+		for _, name := range append(src.Env, src.EnvFiles...) {
 			t.Setenv(name, "")
 		}
 	}
@@ -60,13 +73,25 @@ func TestFind(t *testing.T) {
 	}
 	t.Setenv("GH_TOKEN", envTok)
 	t.Setenv("SLACK_BOT_TOKEN", slackEnv)
+	// An identity file both listed by the provider and named by the
+	// variable is one source, labelled with the variable.
+	fileID, envID := ageIdentity(t), ageIdentity(t)
+	write("sops/age/keys.txt", "# public key: "+fileID.Recipient().String()+"\n"+fileID.String()+"\n")
+	t.Setenv("SOPS_AGE_KEY_FILE", filepath.Join(cfg, "sops", "age", "keys.txt"))
+	t.Setenv("SOPS_AGE_KEY", envID.String())
 	if err := os.WriteFile(".env", []byte("GITHUB_TOKEN="+hubTok+"\nSLACK_TOKEN="+slackTok+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	got := Match(Find(context.Background(), providers.Default()))
-	if len(got) != 5 {
+	if len(got) != 7 {
 		t.Fatalf("Match = %v", got)
+	}
+	if src := got[detect.Fingerprint(fileID.String())]; len(src) != 1 || src[0] != "~/.config/sops/age/keys.txt ($SOPS_AGE_KEY_FILE)" {
+		t.Errorf("identity file sources = %v", src)
+	}
+	if src := got[detect.Fingerprint(envID.String())]; len(src) != 1 || src[0] != "$SOPS_AGE_KEY" {
+		t.Errorf("identity env sources = %v", src)
 	}
 	if src := strings.Join(got[detect.Fingerprint(hubTok)], ","); src != "~/.config/hub,"+mustAbs(t, ".env") {
 		t.Errorf("hub token sources = %q", src)
@@ -85,7 +110,7 @@ func TestFind(t *testing.T) {
 	}
 	for fp, srcs := range got {
 		for _, s := range srcs {
-			if strings.Contains(s, "gh"+"p_") || strings.Contains(s, "gh"+"o_") || strings.Contains(s, "xoxb"+"-") {
+			if strings.Contains(s, "gh"+"p_") || strings.Contains(s, "gh"+"o_") || strings.Contains(s, "xoxb"+"-") || strings.Contains(s, "AGE-SECRET") {
 				t.Fatalf("source %q for %s leaks a token value", s, fp)
 			}
 		}
