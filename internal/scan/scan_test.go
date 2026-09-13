@@ -16,6 +16,7 @@ import (
 	"github.com/teemow/patty/internal/detect"
 	"github.com/teemow/patty/internal/detect/aws"
 	"github.com/teemow/patty/internal/detect/github"
+	"github.com/teemow/patty/internal/detect/providers"
 	"github.com/teemow/patty/internal/detect/registry"
 	"github.com/teemow/patty/internal/detect/slack"
 	"github.com/teemow/patty/internal/detect/sops"
@@ -23,6 +24,10 @@ import (
 	"github.com/teemow/patty/internal/gitrepo"
 	"github.com/teemow/patty/internal/source"
 )
+
+// defaultProviders is the registry every scan test uses unless it builds
+// its own.
+var defaultProviders = providers.Default()
 
 func git(t *testing.T, dir string, args ...string) string {
 	t.Helper()
@@ -90,7 +95,7 @@ func TestRepoFindsOrphanedFileAndMessageTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	rewrites := []Rewrite{{SHA: orphanCommit, Description: "force-pushed away from main on 2026-09-10"}}
-	res, err := Repo(ctx, "fixture", repo, Remote{Rewrites: rewrites}, Options{Workers: 2, MaxObject: 2048})
+	res, err := Repo(ctx, "fixture", repo, Remote{Rewrites: rewrites}, Options{Providers: defaultProviders, Workers: 2, MaxObject: 2048})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +146,7 @@ func TestRepoFindsOrphanedFileAndMessageTokens(t *testing.T) {
 	}
 
 	// Ignoring by fingerprint drops the finding entirely.
-	res, err = Repo(ctx, "fixture", repo, Remote{}, Options{Workers: 1, Ignore: map[string]bool{kept.Fingerprint: true}})
+	res, err = Repo(ctx, "fixture", repo, Remote{}, Options{Providers: defaultProviders, Workers: 1, Ignore: map[string]bool{kept.Fingerprint: true}})
 	if err != nil || len(res.Findings) != 4 { // no size limit: the large object's token appears, the ignored one disappears
 		t.Fatalf("ignore: %d findings, %v", len(res.Findings), err)
 	}
@@ -167,7 +172,7 @@ func TestRepoCompletesKeyPairAcrossObjects(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, workers := range []int{1, 4} {
-		res, err := Repo(ctx, "fixture", repo, Remote{}, Options{Workers: workers})
+		res, err := Repo(ctx, "fixture", repo, Remote{}, Options{Providers: defaultProviders, Workers: workers})
 		if err != nil || len(res.Findings) != 1 {
 			t.Fatalf("workers=%d: %d findings, %v", workers, len(res.Findings), err)
 		}
@@ -194,7 +199,7 @@ func TestRepoReportsOneLoginPerRegistryHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := Repo(ctx, "fixture", repo, Remote{}, Options{})
+	res, err := Repo(ctx, "fixture", repo, Remote{}, Options{Providers: defaultProviders})
 	if err != nil || len(res.Findings) != 2 {
 		t.Fatalf("%d findings, %v: %+v", len(res.Findings), err, res.Findings)
 	}
@@ -213,11 +218,25 @@ func TestRepoReportsOneLoginPerRegistryHost(t *testing.T) {
 	}
 }
 
+func TestRepoRequiresProviders(t *testing.T) {
+	dir, _ := fixture(t)
+	repo, err := gitrepo.Open(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if recover() == nil {
+			t.Fatal("a nil registry is a programming error and must panic")
+		}
+	}()
+	_, _ = Repo(context.Background(), "fixture", repo, Remote{}, Options{Workers: 1})
+}
+
 func TestRunLocalTargetAndSummary(t *testing.T) {
 	dir, _ := fixture(t)
 	var seen []string
 	results := Run(context.Background(), []source.Target{{Display: "local", Local: dir}, {Display: "missing", Local: t.TempDir()}},
-		RunOptions{Options: Options{Workers: 1}, Cache: &disk.Cache{Dir: t.TempDir(), MaxBytes: disk.GiB, MinFree: 0}, Parallel: 2},
+		RunOptions{Options: Options{Providers: defaultProviders, Workers: 1}, Cache: &disk.Cache{Dir: t.TempDir(), MaxBytes: disk.GiB, MinFree: 0}, Parallel: 2},
 		func(r Result) { seen = append(seen, r.Target) })
 	if len(results) != 2 || len(seen) != 2 {
 		t.Fatalf("results=%d seen=%d", len(results), len(seen))
@@ -303,7 +322,7 @@ func TestRepoCorrelatesIdentitiesWithSopsRecipients(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, workers := range []int{1, 4} {
-		res, err := Repo(ctx, "fixture", repo, Remote{}, Options{Workers: workers, Verify: true})
+		res, err := Repo(ctx, "fixture", repo, Remote{}, Options{Providers: defaultProviders, Workers: workers, Verify: true})
 		if err != nil || len(res.Findings) != 1 {
 			t.Fatalf("workers=%d: %d findings, %v", workers, len(res.Findings), err)
 		}

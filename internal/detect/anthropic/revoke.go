@@ -57,13 +57,9 @@ func (k apiKey) describe() string {
 // not as revoked. An inactive key can be reactivated in the Console;
 // archiving it for good is left to the owner.
 func (p *Provider) Revoke(ctx context.Context, tokens []detect.Token) error {
-	var errs []error
-	for _, tok := range tokens {
-		if err := p.deactivate(ctx, tok, false); err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", detect.Redact(tok.Value), err))
-		}
-	}
-	return errors.Join(errs...)
+	return detect.RevokeEach(ctx, tokens, func(ctx context.Context, tok detect.Token) error {
+		return p.deactivate(ctx, tok, false)
+	})
 }
 
 // DryRunRevoke implements detect.DryRunRevoker: it finds the key in the

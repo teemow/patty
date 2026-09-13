@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/teemow/patty/internal/detect"
-	"github.com/teemow/patty/internal/detect/providers"
+	"github.com/teemow/patty/internal/disk"
 	"github.com/teemow/patty/internal/gitrepo"
 )
 
@@ -27,18 +27,19 @@ type Options struct {
 	// Ignore holds the token fingerprints and credential kinds to leave out
 	// of the results.
 	Ignore map[string]bool
-	// Providers is the set of credential providers to look for; nil means
-	// every provider patty ships with.
+	// Providers is the set of credential providers to look for. It is
+	// required: the caller assembles it, so this package need not know any
+	// provider. A nil registry is a programming error and panics.
 	Providers *detect.Registry
 	// Verify checks each credential found against its provider's API.
 	Verify bool
 }
 
 func (o Options) providers() *detect.Registry {
-	if o.Providers != nil {
-		return o.Providers
+	if o.Providers == nil {
+		panic("scan: Options.Providers is nil")
 	}
-	return providers.Default()
+	return o.Providers
 }
 
 func (o Options) workers() int {
@@ -728,7 +729,7 @@ func Describe(r Result) string {
 		return "failed: " + r.Err.Error()
 	}
 	st := r.Stats
-	s := fmt.Sprintf("%d objects · %s · %s", st.Scanned, humanBytes(st.Bytes), st.Duration.Round(time.Millisecond))
+	s := fmt.Sprintf("%d objects · %s · %s", st.Scanned, disk.FormatSize(st.Bytes), st.Duration.Round(time.Millisecond))
 	if st.Refs > 0 {
 		s += fmt.Sprintf(" · %d refs", st.Refs)
 	}
@@ -742,16 +743,4 @@ func Describe(r Result) string {
 		s += fmt.Sprintf(" · %d large objects skipped", st.Skipped)
 	}
 	return s
-}
-
-func humanBytes(n int64) string {
-	switch {
-	case n >= 1<<30:
-		return fmt.Sprintf("%.1f GiB", float64(n)/float64(1<<30))
-	case n >= 1<<20:
-		return fmt.Sprintf("%.1f MiB", float64(n)/float64(1<<20))
-	case n >= 1<<10:
-		return fmt.Sprintf("%.1f KiB", float64(n)/float64(1<<10))
-	}
-	return fmt.Sprintf("%d B", n)
 }
