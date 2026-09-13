@@ -100,13 +100,9 @@ func projectEntry(proj project) func(json.RawMessage) (entry, error) {
 // matches belongs to another organization and is reported as such, not as
 // revoked. Deletion is final.
 func (p *Provider) Revoke(ctx context.Context, tokens []detect.Token) error {
-	var errs []error
-	for _, tok := range tokens {
-		if err := p.remove(ctx, tok, false); err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", detect.Redact(tok.Value), err))
-		}
-	}
-	return errors.Join(errs...)
+	return detect.RevokeEach(ctx, tokens, func(ctx context.Context, tok detect.Token) error {
+		return p.remove(ctx, tok, false)
+	})
 }
 
 // DryRunRevoke implements detect.DryRunRevoker: it finds the key in the

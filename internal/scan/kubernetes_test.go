@@ -34,7 +34,7 @@ func TestRepoFindsTokensInsideSecretManifests(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := Repo(ctx, "fixture", repo, Remote{}, Options{Workers: 1})
+	res, err := Repo(ctx, "fixture", repo, Remote{}, Options{Providers: defaultProviders, Workers: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestRepoFindsTokensInsideSecretManifests(t *testing.T) {
 	}
 
 	// --ignore takes the kind as well as a fingerprint.
-	res, err = Repo(ctx, "fixture", repo, Remote{}, Options{Workers: 1, Ignore: map[string]bool{string(kubernetes.KindSecretManifest): true}})
+	res, err = Repo(ctx, "fixture", repo, Remote{}, Options{Providers: defaultProviders, Workers: 1, Ignore: map[string]bool{string(kubernetes.KindSecretManifest): true}})
 	if err != nil {
 		t.Fatal(err)
 	}

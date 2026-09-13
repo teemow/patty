@@ -49,13 +49,9 @@ func (t accessToken) readOnly() bool {
 // deactivated token can be reactivated by its owner; deleting it is left to
 // them. Every other kind is rotated by hand as the report says.
 func (p *Provider) Revoke(ctx context.Context, tokens []detect.Token) error {
-	var errs []error
-	for _, tok := range tokens {
-		if err := p.deactivate(ctx, tok, false); err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", detect.Redact(tok.Value), err))
-		}
-	}
-	return errors.Join(errs...)
+	return detect.RevokeEach(ctx, tokens, func(ctx context.Context, tok detect.Token) error {
+		return p.deactivate(ctx, tok, false)
+	})
 }
 
 // DryRunRevoke implements detect.DryRunRevoker: it logs in and finds the

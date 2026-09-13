@@ -24,13 +24,7 @@ import (
 // does not. A deactivated key can be re-enabled by its owner; deleting it
 // for good is left to them. There is no dry run, IAM has none.
 func (p *Provider) Revoke(ctx context.Context, tokens []detect.Token) error {
-	var errs []error
-	for _, tok := range tokens {
-		if err := p.deactivate(ctx, tok); err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", detect.Redact(tok.Value), err))
-		}
-	}
-	return errors.Join(errs...)
+	return detect.RevokeEach(ctx, tokens, p.deactivate)
 }
 
 func (p *Provider) deactivate(ctx context.Context, tok detect.Token) error {

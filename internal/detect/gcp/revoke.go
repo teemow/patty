@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/url"
 
@@ -17,13 +16,7 @@ import (
 // already rejects counts as done, Verify confirms it afterwards. Service
 // account keys and API keys are only deleted by their owner.
 func (p *Provider) Revoke(ctx context.Context, tokens []detect.Token) error {
-	var errs []error
-	for _, tok := range tokens {
-		if err := p.revoke(ctx, tok); err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", detect.Redact(tok.Value), err))
-		}
-	}
-	return errors.Join(errs...)
+	return detect.RevokeEach(ctx, tokens, p.revoke)
 }
 
 // DryRunRevoke implements detect.DryRunRevoker: the revoke endpoint has no

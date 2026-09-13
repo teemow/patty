@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -50,9 +51,18 @@ func sample() []scan.Result {
 	}
 }
 
+func TestTextRequiresProviders(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("a nil registry is a programming error and must panic")
+		}
+	}()
+	Text(io.Discard, sample(), Options{})
+}
+
 func TestTextMergesAcrossReposAndRedacts(t *testing.T) {
 	var buf bytes.Buffer
-	Text(&buf, sample(), Options{})
+	Text(&buf, sample(), Options{Providers: registry})
 	out := buf.String()
 	if strings.Contains(out, "SECRET") {
 		t.Fatalf("secrets must be redacted:\n%s", out)
@@ -71,13 +81,13 @@ func TestTextMergesAcrossReposAndRedacts(t *testing.T) {
 	}
 
 	buf.Reset()
-	Text(&buf, sample(), Options{ShowSecrets: true})
+	Text(&buf, sample(), Options{Providers: registry, ShowSecrets: true})
 	if !strings.Contains(buf.String(), "ghp_SECRET") {
 		t.Fatal("--show-secrets must print the value")
 	}
 
 	buf.Reset()
-	Text(&buf, nil, Options{})
+	Text(&buf, nil, Options{Providers: registry})
 	if !strings.Contains(buf.String(), "No credentials found") {
 		t.Fatal("empty report")
 	}
@@ -101,7 +111,7 @@ func TestStatusLine(t *testing.T) {
 
 func TestJSON(t *testing.T) {
 	var buf bytes.Buffer
-	if err := JSON(&buf, sample(), Options{}); err != nil {
+	if err := JSON(&buf, sample(), Options{Providers: registry}); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(buf.String(), "SECRET") {
@@ -118,7 +128,7 @@ func TestJSON(t *testing.T) {
 		t.Fatalf("results: %+v", out.Results)
 	}
 	buf.Reset()
-	_ = JSON(&buf, sample(), Options{ShowSecrets: true})
+	_ = JSON(&buf, sample(), Options{Providers: registry, ShowSecrets: true})
 	if !strings.Contains(buf.String(), `"token": "ghp_SECRET"`) {
 		t.Fatal("--show-secrets in JSON")
 	}
@@ -140,7 +150,7 @@ func TestTextIssuerLocalAndRemediation(t *testing.T) {
 	rs[0].Findings[1].Verification = &detect.Verification{Status: detect.StatusActive, Detail: "user patty", ClientID: "178c6fc778ccc68e1d6a", App: "GitHub CLI", Expires: "2026-10-01"}
 	rs[0].Findings[1].Local = []string{"~/.config/gh/hosts.yml"}
 	var buf bytes.Buffer
-	Text(&buf, rs, Options{})
+	Text(&buf, rs, Options{Providers: registry})
 	out := buf.String()
 	for _, want := range []string{
 		"user patty  issued to GitHub CLI  expires 2026-10-01",
@@ -218,7 +228,7 @@ func TestTextShowsAttributionPerProvider(t *testing.T) {
 		{Provider: "AWS", Kind: aws.KindAccessKey, Fingerprint: "dddd", Token: "AKIA-ID", Secret: "PAIRSECRET", Redacted: "AKIA-…D", Attribution: "account 123456789012, key pair", Locations: loc},
 	}}}
 	var buf bytes.Buffer
-	Text(&buf, rs, Options{ShowSecrets: true})
+	Text(&buf, rs, Options{Providers: registry, ShowSecrets: true})
 	out := buf.String()
 	for _, want := range []string{"2 credentials found", "slack-bot-token", "team 1234567890, bot 1234567890123", "(shape match, no checksum)", "↳ revoke   if it is still valid, at https://api.slack.com/apps; or with --verify --revoke",
 		"aws-access-key", "AKIA-ID  fp dddd  account 123456789012, key pair", "↳ audit    check CloudTrail"} {
@@ -230,12 +240,12 @@ func TestTextShowsAttributionPerProvider(t *testing.T) {
 		t.Fatalf("the companion secret is never shown, not even with --show-secrets:\n%s", out)
 	}
 	buf.Reset()
-	Text(&buf, rs, Options{})
+	Text(&buf, rs, Options{Providers: registry})
 	if out := buf.String(); strings.Contains(out, "SECRET") {
 		t.Fatalf("secrets must be redacted:\n%s", out)
 	}
 	buf.Reset()
-	if err := JSON(&buf, rs, Options{ShowSecrets: true}); err != nil || strings.Contains(buf.String(), "PAIRSECRET") {
+	if err := JSON(&buf, rs, Options{Providers: registry, ShowSecrets: true}); err != nil || strings.Contains(buf.String(), "PAIRSECRET") {
 		t.Fatalf("the companion secret never reaches the JSON: %v\n%s", err, buf.String())
 	}
 }
@@ -318,12 +328,12 @@ func TestTextShowsWhatAnIdentityDecrypts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := scan.Repo(context.Background(), "acme/infra", repo, scan.Remote{}, scan.Options{Workers: 1, Verify: true})
+	res, err := scan.Repo(context.Background(), "acme/infra", repo, scan.Remote{}, scan.Options{Providers: registry, Workers: 1, Verify: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	Text(&buf, []scan.Result{res}, Options{})
+	Text(&buf, []scan.Result{res}, Options{Providers: registry})
 	out := buf.String()
 	if strings.Contains(out, id.String()) {
 		t.Fatalf("the identity must be redacted:\n%s", out)

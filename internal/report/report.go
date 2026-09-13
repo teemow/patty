@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/teemow/patty/internal/detect"
-	"github.com/teemow/patty/internal/detect/providers"
+	"github.com/teemow/patty/internal/disk"
 	"github.com/teemow/patty/internal/scan"
 )
 
@@ -20,16 +20,17 @@ type Options struct {
 	ShowSecrets bool
 	// AllRefs lists every ref a commit is on instead of the first few.
 	AllRefs bool
-	// Providers answers where a credential of each kind is revoked; nil
-	// means every provider patty ships with.
+	// Providers answers where a credential of each kind is revoked. It is
+	// required for Text: the caller assembles it, so this package need not
+	// know any provider. A nil registry is a programming error and panics.
 	Providers *detect.Registry
 }
 
 func (o Options) providers() *detect.Registry {
-	if o.Providers != nil {
-		return o.Providers
+	if o.Providers == nil {
+		panic("report: Options.Providers is nil")
 	}
-	return providers.Default()
+	return o.Providers
 }
 
 // refLimit is how many refs a location line names before "+N more".
@@ -404,7 +405,7 @@ func footer(s scan.Summary) string {
 	if s.Skipped > 0 {
 		parts = append(parts, fmt.Sprintf("%d skipped", s.Skipped))
 	}
-	parts = append(parts, fmt.Sprintf("%d objects", s.Objects), humanBytes(s.Bytes))
+	parts = append(parts, fmt.Sprintf("%d objects", s.Objects), disk.FormatSize(s.Bytes))
 	return "in " + strings.Join(parts, ", ")
 }
 
@@ -480,16 +481,4 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n-1] + "…"
-}
-
-func humanBytes(n int64) string {
-	switch {
-	case n >= 1<<30:
-		return fmt.Sprintf("%.1f GiB", float64(n)/float64(1<<30))
-	case n >= 1<<20:
-		return fmt.Sprintf("%.1f MiB", float64(n)/float64(1<<20))
-	case n >= 1<<10:
-		return fmt.Sprintf("%.1f KiB", float64(n)/float64(1<<10))
-	}
-	return fmt.Sprintf("%d B", n)
 }
