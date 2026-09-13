@@ -13,7 +13,7 @@ func init() {
 		Use:   "cache",
 		Short: "Show the mirror cache",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cache, err := newCache()
+			cache, err := newCache(defaults())
 			if err != nil {
 				return err
 			}
@@ -35,7 +35,7 @@ func init() {
 		Use:   "clean",
 		Short: "Remove all mirrors from the cache",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cache, err := newCache()
+			cache, err := newCache(defaults())
 			if err != nil {
 				return err
 			}

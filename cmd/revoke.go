@@ -12,13 +12,20 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/teemow/patty/internal/detect"
+	"github.com/teemow/patty/internal/detect/providers"
 	"github.com/teemow/patty/internal/report"
 	"github.com/teemow/patty/internal/scan"
 )
 
 func init() {
+	rootCmd.AddCommand(newRevokeCmd())
+}
+
+// newRevokeCmd builds the revoke subcommand; its provider registry is built
+// when it runs.
+func newRevokeCmd() *cobra.Command {
 	var yes bool
-	revokeCmd := &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "revoke [token...]",
 		Short: "Ask the provider to revoke tokens you have in hand",
 		Long: `Revoke submits each token to its provider's revocation endpoint. GitHub
@@ -53,15 +60,22 @@ identities, PGP keys and Kubernetes credentials have no one to revoke them
 with; the report says how to rotate them.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			opts.yes = yes
-			return runRevoke(cmd, args)
+			return runRevoke(cmd, args, revocation{registry: providers.Default(), yes: yes})
 		},
 	}
-	revokeCmd.Flags().BoolVarP(&yes, "yes", "y", false, "Revoke without asking for confirmation")
-	rootCmd.AddCommand(revokeCmd)
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Revoke without asking for confirmation")
+	return cmd
 }
 
-func runRevoke(cmd *cobra.Command, args []string) error {
+// revocation is the interactive revocation flow shared by --revoke and the
+// revoke subcommand: it lists what is about to happen, asks, and reports.
+type revocation struct {
+	registry *detect.Registry
+	// yes skips the confirmation.
+	yes bool
+}
+
+func runRevoke(cmd *cobra.Command, args []string, r revocation) error {
 	input := strings.Join(args, "\n")
 	if len(args) == 0 {
 		raw, err := io.ReadAll(cmd.InOrStdin())
@@ -70,23 +84,23 @@ func runRevoke(cmd *cobra.Command, args []string) error {
 		}
 		input = string(raw)
 	}
-	tokens := parseTokens(input)
+	tokens := parseTokens(r.registry, input)
 	if len(tokens) == 0 {
 		return errors.New("no tokens in the input")
 	}
 	var findings []scan.Finding
 	for _, tok := range tokens {
-		if !registry.Revocable(tok.Kind) {
+		if !r.registry.Revocable(tok.Kind) {
 			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "skipping %s (%s): %s credentials cannot be revoked through the API\n", detect.Redact(tok.Value), tok.Fingerprint(), tok.Kind)
 			continue
 		}
-		findings = append(findings, *scan.NewFinding(registry, tok))
+		findings = append(findings, *scan.NewFinding(r.registry, tok))
 	}
 	if len(findings) == 0 {
 		return errors.New("nothing to revoke")
 	}
 	results := []scan.Result{{Target: "input", Findings: findings}}
-	if err := revoke(cmd, results, findings); err != nil {
+	if err := r.revoke(cmd, results, findings); err != nil {
 		return err
 	}
 	for _, f := range results[0].Findings {
@@ -100,7 +114,7 @@ func runRevoke(cmd *cobra.Command, args []string) error {
 }
 
 // parseTokens extracts distinct well-formed tokens from free text.
-func parseTokens(input string) []detect.Token {
+func parseTokens(registry *detect.Registry, input string) []detect.Token {
 	var out []detect.Token
 	seen := map[string]bool{}
 	for _, tok := range registry.Find([]byte(input)) {
@@ -112,17 +126,17 @@ func parseTokens(input string) []detect.Token {
 	return out
 }
 
-// revokeActive revokes every active credential in results after confirmation.
-func revokeActive(cmd *cobra.Command, results []scan.Result) error {
-	tokens := scan.Revocable(results, registry)
+// active revokes every active credential in results after confirmation.
+func (r revocation) active(cmd *cobra.Command, results []scan.Result) error {
+	tokens := scan.Revocable(results, r.registry)
 	if len(tokens) == 0 {
 		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "No active credentials to revoke")
 		return nil
 	}
-	return revoke(cmd, results, tokens)
+	return r.revoke(cmd, results, tokens)
 }
 
-func revoke(cmd *cobra.Command, results []scan.Result, tokens []scan.Finding) error {
+func (r revocation) revoke(cmd *cobra.Command, results []scan.Result, tokens []scan.Finding) error {
 	stderr := cmd.ErrOrStderr()
 	_, _ = fmt.Fprintf(stderr, "\nAbout to ask %s to revoke %d %s:\n", providerNames(tokens), len(tokens), report.Plural(len(tokens), "credential", "credentials"))
 	for _, f := range tokens {
@@ -131,14 +145,14 @@ func revoke(cmd *cobra.Command, results []scan.Result, tokens []scan.Finding) er
 			line += "  " + f.Verification.Detail
 		}
 		_, _ = fmt.Fprintln(stderr, line)
-		for _, w := range warnings(f) {
+		for _, w := range r.warnings(f) {
 			_, _ = fmt.Fprintln(stderr, "      "+w)
 		}
-		if note := rehearse(cmd, f); note != "" {
+		if note := r.rehearse(cmd, f); note != "" {
 			_, _ = fmt.Fprintln(stderr, "      "+note)
 		}
 	}
-	ok, err := confirm(cmd, "Proceed? [y/N] ")
+	ok, err := r.confirm(cmd, "Proceed? [y/N] ")
 	if err != nil {
 		return err
 	}
@@ -146,7 +160,7 @@ func revoke(cmd *cobra.Command, results []scan.Result, tokens []scan.Finding) er
 		_, _ = fmt.Fprintln(stderr, "Not revoking anything")
 		return nil
 	}
-	done, err := scan.Revoke(cmd.Context(), results, tokens, registry)
+	done, err := scan.Revoke(cmd.Context(), results, tokens, r.registry)
 	if err != nil {
 		return err
 	}
@@ -179,8 +193,8 @@ func providerNames(tokens []scan.Finding) string {
 // rehearse asks a provider that supports it how the revocation would go,
 // without revoking anything, so the answer is on the screen before the user
 // confirms. Providers without a dry run contribute nothing.
-func rehearse(cmd *cobra.Command, f scan.Finding) string {
-	dr, ok := registry.Provider(f.Kind).(detect.DryRunRevoker)
+func (r revocation) rehearse(cmd *cobra.Command, f scan.Finding) string {
+	dr, ok := r.registry.Provider(f.Kind).(detect.DryRunRevoker)
 	if !ok {
 		return ""
 	}
@@ -193,9 +207,9 @@ func rehearse(cmd *cobra.Command, f scan.Finding) string {
 // warnings names the side effects of revoking this credential that are easy
 // to miss: an OAuth revocation takes the application's whole authorization
 // with it, and a token still configured locally logs that tool out.
-func warnings(f scan.Finding) []string {
+func (r revocation) warnings(f scan.Finding) []string {
 	var out []string
-	if effect := registry.Info(f.Kind).RevokeEffect; effect != "" {
+	if effect := r.registry.Info(f.Kind).RevokeEffect; effect != "" {
 		app := "this application"
 		if f.Verification != nil && f.Verification.Issuer() != "" {
 			app = f.Verification.Issuer()
@@ -210,8 +224,8 @@ func warnings(f scan.Finding) []string {
 
 // confirm asks on the terminal unless --yes was given. Without a terminal
 // and without --yes it refuses, so a script cannot revoke by accident.
-func confirm(cmd *cobra.Command, prompt string) (bool, error) {
-	if opts.yes {
+func (r revocation) confirm(cmd *cobra.Command, prompt string) (bool, error) {
+	if r.yes {
 		return true, nil
 	}
 	in, isFile := cmd.InOrStdin().(*os.File)

@@ -554,95 +554,188 @@ func noreplyLogins(commit []byte) []string {
 // attribute resolves paths, introducing commits and refs for every hit. It
 // returns the path of every object it could map, for correlate.
 func attribute(ctx context.Context, name string, repo *gitrepo.Repo, commits []string, rewrites []Rewrite, findings map[string]*Finding, hits map[string]map[hit]bool, stats *Stats) (map[string]string, error) {
+	a, err := newAttributor(ctx, name, repo, commits, rewrites)
+	if err != nil {
+		return nil, err
+	}
+	stats.Orphaned = len(a.orphanRoots)
+	for value, locs := range hits {
+		f := findings[value]
+		for h := range locs {
+			loc, err := a.locate(ctx, h)
+			if err != nil {
+				return nil, err
+			}
+			f.Locations = append(f.Locations, loc)
+		}
+		sortLocations(f.Locations)
+	}
+	return a.paths, nil
+}
+
+// attributor says where a hit sits in a repository: the path of its object,
+// the commit that introduced it, and the refs that still reach that commit.
+// It remembers each answer, since a credential is usually hit many times in
+// the same few objects and commits.
+type attributor struct {
+	name        string
+	repo        *gitrepo.Repo
+	orphanRoots []string // commits no ref reaches
+	rewrites    []Rewrite
+	paths       map[string]string      // object -> path, reachable or orphaned
+	objects     map[string]attribution // object -> its path and commit
+	refsOf      map[string][]string    // commit -> refs whose history includes it
+	rewriteOf   map[string]string      // commit -> how it went unreachable, when known
+}
+
+// attribution is what an object is attributed to: its path and the commit
+// that introduced it, the commit itself for a commit object.
+type attribution struct {
+	path   string
+	commit *gitrepo.Commit
+}
+
+// newAttributor finds the orphaned commits among commits and maps every
+// object to a path, through the refs first and the orphaned commits after.
+func newAttributor(ctx context.Context, name string, repo *gitrepo.Repo, commits []string, rewrites []Rewrite) (*attributor, error) {
+	roots, err := orphanRoots(ctx, repo, commits)
+	if err != nil {
+		return nil, err
+	}
+	paths, err := objectPaths(ctx, repo, roots)
+	if err != nil {
+		return nil, err
+	}
+	return &attributor{
+		name: name, repo: repo, orphanRoots: roots, rewrites: rewrites, paths: paths,
+		objects: map[string]attribution{}, refsOf: map[string][]string{}, rewriteOf: map[string]string{},
+	}, nil
+}
+
+// orphanRoots returns the commits among commits that no ref reaches.
+func orphanRoots(ctx context.Context, repo *gitrepo.Repo, commits []string) ([]string, error) {
 	reachable, err := repo.ReachableCommits(ctx)
 	if err != nil {
 		return nil, err
 	}
-	var orphanRoots []string
+	var roots []string
 	for _, c := range commits {
 		if !reachable[c] {
-			orphanRoots = append(orphanRoots, c)
+			roots = append(roots, c)
 		}
 	}
-	stats.Orphaned = len(orphanRoots)
+	return roots, nil
+}
 
+// objectPaths maps every object to a path: the one it has in the reachable
+// history, or else the one an orphaned commit gives it.
+func objectPaths(ctx context.Context, repo *gitrepo.Repo, orphanRoots []string) (map[string]string, error) {
 	paths, err := repo.ObjectPaths(ctx, nil)
+	if err != nil || len(orphanRoots) == 0 {
+		return paths, err
+	}
+	orphanPaths, err := repo.ObjectPaths(ctx, orphanRoots)
 	if err != nil {
 		return nil, err
 	}
-	if len(orphanRoots) > 0 {
-		orphanPaths, err := repo.ObjectPaths(ctx, orphanRoots)
-		if err != nil {
-			return nil, err
+	for sha, p := range orphanPaths {
+		if _, ok := paths[sha]; !ok {
+			paths[sha] = p
 		}
-		for sha, p := range orphanPaths {
-			if _, ok := paths[sha]; !ok {
-				paths[sha] = p
-			}
-		}
-	}
-
-	type attribution struct {
-		path   string
-		commit *gitrepo.Commit
-	}
-	objects := map[string]attribution{}
-	refsOf := map[string][]string{}
-	rewriteOf := map[string]string{}
-	for value, locs := range hits {
-		f := findings[value]
-		for h := range locs {
-			a, ok := objects[h.object.SHA]
-			if !ok {
-				a.path = paths[h.object.SHA]
-				if h.object.Type == "commit" {
-					a.commit, err = repo.Commit(ctx, h.object.SHA)
-				} else {
-					a.commit, err = repo.IntroducingCommit(ctx, h.object.SHA, nil)
-					if err == nil && a.commit == nil && len(orphanRoots) > 0 {
-						a.commit, err = repo.IntroducingCommit(ctx, h.object.SHA, orphanRoots)
-					}
-				}
-				if err != nil {
-					return nil, err
-				}
-				objects[h.object.SHA] = a
-			}
-			loc := Location{Repo: name, Object: h.object.SHA, ObjectType: h.object.Type, Path: a.path, Line: h.line, Commit: a.commit}
-			if a.commit != nil {
-				refs, ok := refsOf[a.commit.SHA]
-				if !ok {
-					if refs, err = repo.RefsContaining(ctx, a.commit.SHA); err != nil {
-						return nil, err
-					}
-					refsOf[a.commit.SHA] = refs
-					if len(refs) == 0 {
-						for _, rw := range rewrites {
-							if repo.IsAncestor(ctx, a.commit.SHA, rw.SHA) {
-								rewriteOf[a.commit.SHA] = rw.Description
-								break
-							}
-						}
-					}
-				}
-				loc.Refs = refs
-				loc.Orphaned = len(refs) == 0
-				loc.Rewrite = rewriteOf[a.commit.SHA]
-			}
-			f.Locations = append(f.Locations, loc)
-		}
-		sort.Slice(f.Locations, func(i, j int) bool {
-			a, b := f.Locations[i], f.Locations[j]
-			if a.Commit != nil && b.Commit != nil && a.Commit.Date != b.Commit.Date {
-				return a.Commit.Date < b.Commit.Date
-			}
-			if a.Path != b.Path {
-				return a.Path < b.Path
-			}
-			return a.Line < b.Line
-		})
 	}
 	return paths, nil
+}
+
+// locate builds the Location of one hit.
+func (a *attributor) locate(ctx context.Context, h hit) (Location, error) {
+	at, err := a.object(ctx, h.object)
+	if err != nil {
+		return Location{}, err
+	}
+	loc := Location{Repo: a.name, Object: h.object.SHA, ObjectType: h.object.Type, Path: at.path, Line: h.line, Commit: at.commit}
+	if at.commit == nil {
+		return loc, nil
+	}
+	refs, err := a.refs(ctx, at.commit.SHA)
+	if err != nil {
+		return Location{}, err
+	}
+	loc.Refs = refs
+	loc.Orphaned = len(refs) == 0
+	loc.Rewrite = a.rewriteOf[at.commit.SHA]
+	return loc, nil
+}
+
+// object returns the path and introducing commit of obj, looked up once. A
+// blob or tag no reachable commit introduces is tried against the orphaned
+// commits.
+func (a *attributor) object(ctx context.Context, obj gitrepo.Object) (attribution, error) {
+	if at, ok := a.objects[obj.SHA]; ok {
+		return at, nil
+	}
+	at := attribution{path: a.paths[obj.SHA]}
+	var err error
+	if obj.Type == "commit" {
+		at.commit, err = a.repo.Commit(ctx, obj.SHA)
+	} else {
+		at.commit, err = a.introducingCommit(ctx, obj.SHA)
+	}
+	if err != nil {
+		return attribution{}, err
+	}
+	a.objects[obj.SHA] = at
+	return at, nil
+}
+
+func (a *attributor) introducingCommit(ctx context.Context, sha string) (*gitrepo.Commit, error) {
+	c, err := a.repo.IntroducingCommit(ctx, sha, nil)
+	if err != nil || c != nil || len(a.orphanRoots) == 0 {
+		return c, err
+	}
+	return a.repo.IntroducingCommit(ctx, sha, a.orphanRoots)
+}
+
+// refs returns the refs whose history includes the commit, looked up once.
+// A commit no ref reaches is matched against the rewrites the hosting
+// service reported, so the report can say how it went unreachable.
+func (a *attributor) refs(ctx context.Context, commit string) ([]string, error) {
+	if refs, ok := a.refsOf[commit]; ok {
+		return refs, nil
+	}
+	refs, err := a.repo.RefsContaining(ctx, commit)
+	if err != nil {
+		return nil, err
+	}
+	a.refsOf[commit] = refs
+	if len(refs) == 0 {
+		a.rewriteOf[commit] = a.rewrite(ctx, commit)
+	}
+	return refs, nil
+}
+
+// rewrite describes the reported rewrite that took the commit with it, or
+// "" when none did.
+func (a *attributor) rewrite(ctx context.Context, commit string) string {
+	for _, rw := range a.rewrites {
+		if a.repo.IsAncestor(ctx, commit, rw.SHA) {
+			return rw.Description
+		}
+	}
+	return ""
+}
+
+// sortLocations orders locations by commit date, then path, then line.
+func sortLocations(locs []Location) {
+	sort.Slice(locs, func(i, j int) bool {
+		a, b := locs[i], locs[j]
+		if a.Commit != nil && b.Commit != nil && a.Commit.Date != b.Commit.Date {
+			return a.Commit.Date < b.Commit.Date
+		}
+		if a.Path != b.Path {
+			return a.Path < b.Path
+		}
+		return a.Line < b.Line
+	})
 }
 
 // parallel splits items into contiguous shards and runs fn on each
