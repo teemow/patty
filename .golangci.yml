@@ -1,0 +1,30 @@
+# golangci-lint configuration. CI runs it through the shared ci-go workflow,
+# so this file is the one place the lint gate is defined.
+version: "2"
+linters:
+  # The standard set (errcheck, govet, ineffassign, staticcheck, unused)
+  # plus guardrails against regressions in complexity, duplication, error
+  # handling and spelling.
+  default: standard
+  enable:
+    - gocognit
+    - dupl
+    - errorlint
+    - misspell
+  settings:
+    gocognit:
+      min-complexity: 30
+    dupl:
+      threshold: 100
+  exclusions:
+    rules:
+      # Tests are long by nature: a table of cases and its checks.
+      - path: _test\.go
+        linters:
+          - gocognit
+          - dupl
+      # Functions that were over the limit when the gate was introduced.
+      # They may not grow; take one off this list when you shrink it.
+      - linters:
+          - gocognit
+        text: 'of func `(Repo|correlate|runOne|Text|\(\*Client\)\.Rewrites|kubeconfigUsers)` is high'
