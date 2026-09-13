@@ -21,6 +21,19 @@ patty covers all five rows:
 
 Local targets skip steps 1 and 2 and scan the object database as it is, reflog and stashes included.
 
+### Scanning files
+
+Not every credential on a machine was ever committed: the `.env` in a project folder, the `credentials` file copied into a download directory, the key someone saved next to a checkout. A target that is a directory but not a repository, or a single file, is therefore scanned file by file as it is on disk, and `--files` does the same for the working tree of a local repository, in addition to its object database.
+
+The walk takes every regular file below the directory, reads it through the same parallel readers a repository scan uses, and hands it to the same detector, so everything above about detection, attribution and what a credential unlocks applies to files too: an age identity on disk is matched against the `.sops.yaml` and encrypted files next to it. What the walk leaves out:
+
+- **Symbolic links** are not followed, neither to files nor to directories, so a link into `/` or a home directory cannot drag the whole disk into a scan.
+- **`.git` directories** are skipped; a repository's history is read through git, or not at all.
+- **Devices, sockets and pipes** are not files.
+- **Files larger than `--max-object`** are skipped and counted, like large objects.
+
+`.gitignore` is deliberately *not* honoured: ignored files are exactly where credentials hide. A finding in a file has a path relative to the target and no commit; the report says *on disk* for it, or *in the working tree* when the target is a repository, and a credential found both in history and on disk is one finding with every location.
+
 ## Detection
 
 Detection, verification and revocation are organised per **provider**: each provider knows its own credential formats, its API and where its tools keep credentials on a developer machine. The table lists every kind patty ships with. It is generated from the providers themselves (`make docs`), and CI fails when it is out of date.
@@ -195,7 +208,7 @@ Everything more expensive happens only where a candidate asks for it: only an ob
 | The credentials in the [detection table](#detection) | regex + entropy (no rule for Anthropic OAuth tokens, Docker configs, Docker Hub or Quay tokens, Azure storage keys or SAS tokens; a Secret manifest, a JWT and a service account key are matched by shape, not opened) | exact shape + checksum where the format has one, offline attribution, optional live check; for sops identities, the files they decrypt; Secret manifests are decoded and their values searched, JWTs classified by their claims |
 | Private keys | one regex for any armored private key block | the block is parsed and named by its public key; the report says which certificate, `authorized_keys`, `cosign.pub`, image policy or GitHub account trusts it, and `--verify` asks GitHub whether an SSH key still opens an account |
 | Where it points | commit and file of each occurrence | oldest introducing commit, all refs that still contain it, and how orphaned commits went unreachable |
-| Scope | one repository or directory | any number of repositories, whole owners, with a disk budget |
+| Scope | one repository or directory | any number of repositories, whole owners, plain directories and files, with a disk budget |
 | Everything else | Stripe, Twilio, ... | only the kinds in the [detection table](#detection) |
 
 Use both: gitleaks in CI on every push, patty when you want to know what is already out there.

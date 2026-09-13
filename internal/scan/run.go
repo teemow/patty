@@ -89,8 +89,17 @@ func runOne(ctx context.Context, t source.Target, opts RunOptions) Result {
 		if err != nil {
 			return Result{Target: t.Display, Err: err}
 		}
+		if t.Dir != "" {
+			return withFiles(ctx, t, repo, opts.Options, progress)
+		}
 		progress("scanning")
 		return finish(ctx, t.Display, repo, Remote{}, opts.Options)
+	}
+	if t.Dir != "" {
+		progress("scanning files")
+		res, err := Dir(ctx, t.Display, t.Dir, opts.Options)
+		res.Err = err
+		return res
 	}
 
 	estimate := int64(float64(t.Repo.SizeKB)*1024*sizeSlack) + disk.MiB
@@ -163,6 +172,38 @@ func runOne(ctx context.Context, t source.Target, opts RunOptions) Result {
 	res.Stats.Unavailable = lost
 	res.Stats.Disk = repo.DiskUsage()
 	res.Notes = append(res.Notes, notes...)
+	return res
+}
+
+// withFiles scans a repository's object database and the files below the
+// target's directory, and merges both into one result, so a credential
+// found in history and on disk is one finding with every location. The
+// findings are verified once, after the merge.
+func withFiles(ctx context.Context, t source.Target, repo *gitrepo.Repo, opts Options, progress func(string)) Result {
+	verifyAll := opts.Verify
+	opts.Verify = false
+	progress("scanning")
+	res := finish(ctx, t.Display, repo, Remote{}, opts)
+	if res.Err != nil {
+		return res
+	}
+	progress("scanning working tree")
+	files, err := Dir(ctx, t.Display, t.Dir, opts)
+	if err != nil {
+		res.Err = err
+		return res
+	}
+	res.Findings = Merge([]Result{res, files})
+	res.Stats.Objects += files.Stats.Objects
+	res.Stats.Scanned += files.Stats.Scanned
+	res.Stats.Skipped += files.Stats.Skipped
+	res.Stats.Bytes += files.Stats.Bytes
+	res.Stats.Duration += files.Stats.Duration
+	res.Notes = append(res.Notes, files.Notes...)
+	if verifyAll {
+		verify(ctx, opts.providers(), res.Findings)
+		SortFindings(res.Findings)
+	}
 	return res
 }
 

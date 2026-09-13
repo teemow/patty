@@ -94,6 +94,7 @@ func Text(w io.Writer, results []scan.Result, o Options) {
 	findings := scan.Merge(results)
 	s := scan.Summarize(results)
 	registry := o.providers()
+	onDisk := fileTargets(results)
 
 	if len(findings) == 0 {
 		p.f("\n%s %s\n", o.paint(green+bold, "No credentials found"), o.paint(dim, footer(s)))
@@ -150,7 +151,7 @@ func Text(w io.Writer, results []scan.Result, o Options) {
 				p.f("  %s %s %s %s", o.paint(dim, short(c.SHA)), o.paint(dim, day(c.Date)), c.Author, o.paint(dim, "· "+truncate(c.Subject, 60)))
 			}
 			p.ln()
-			p.f("    %s  %s\n", strings.Repeat(" ", len(l.Repo)), o.paint(dim, reachability(l, o)))
+			p.f("    %s  %s\n", strings.Repeat(" ", len(l.Repo)), o.paint(dim, reachability(l, o, onDisk[l.Repo])))
 		}
 		for _, line := range Remediation(f, registry) {
 			p.f("    %s %-8s %s\n", o.paint(color, "↳"), o.paint(bold, line.Label), line.Text)
@@ -321,7 +322,28 @@ func historyAdvice(locs []scan.Location) string {
 	return strings.Join(parts, " · ") + " · forks made in the meantime keep their own copy"
 }
 
-func reachability(l scan.Location, o Options) string {
+// fileTargets names the targets that were scanned as files on disk, with
+// no repository behind them.
+func fileTargets(results []scan.Result) map[string]bool {
+	out := map[string]bool{}
+	for _, r := range results {
+		if r.Files {
+			out[r.Target] = true
+		}
+	}
+	return out
+}
+
+// reachability says how a location can still be reached: through which
+// refs for a commit, or as a file on disk, which for a repository target
+// means the working tree. onDisk is true for a target that is no repository.
+func reachability(l scan.Location, o Options, onDisk bool) string {
+	if l.ObjectType == "file" {
+		if onDisk {
+			return "on disk"
+		}
+		return "in the working tree"
+	}
 	if l.Commit == nil {
 		return "commit unknown"
 	}
@@ -397,15 +419,25 @@ func join(names []string, limit int) string {
 	return strings.Join(names, ", ")
 }
 
+// footer counts what was scanned: repositories, or targets when a plain
+// directory or file was among them; objects, or files when every target
+// was one.
 func footer(s scan.Summary) string {
-	parts := []string{fmt.Sprintf("%d %s", s.Repos, Plural(s.Repos, "repository", "repositories"))}
+	what, unit := Plural(s.Repos, "repository", "repositories"), Plural(s.Objects, "object", "objects")
+	switch {
+	case s.Files == s.Repos:
+		what, unit = Plural(s.Repos, "target", "targets"), Plural(s.Objects, "file", "files")
+	case s.Files > 0:
+		what = Plural(s.Repos, "target", "targets")
+	}
+	parts := []string{fmt.Sprintf("%d %s", s.Repos, what)}
 	if s.Failed > 0 {
 		parts = append(parts, fmt.Sprintf("%d failed", s.Failed))
 	}
 	if s.Skipped > 0 {
 		parts = append(parts, fmt.Sprintf("%d skipped", s.Skipped))
 	}
-	parts = append(parts, fmt.Sprintf("%d objects", s.Objects), disk.FormatSize(s.Bytes))
+	parts = append(parts, fmt.Sprintf("%d %s", s.Objects, unit), disk.FormatSize(s.Bytes))
 	return "in " + strings.Join(parts, ", ")
 }
 
@@ -416,7 +448,10 @@ type Output struct {
 }
 
 type summary struct {
+	// Repositories counts every target; Files the ones scanned as files on
+	// disk only, with no repository behind them.
 	Repositories int   `json:"repositories"`
+	Files        int   `json:"files,omitempty"`
 	Failed       int   `json:"failed"`
 	Skipped      int   `json:"skipped"`
 	Tokens       int   `json:"tokens"`
@@ -430,7 +465,7 @@ type summary struct {
 func JSON(w io.Writer, results []scan.Result, o Options) error {
 	s := scan.Summarize(results)
 	out := Output{
-		Summary: summary{Repositories: s.Repos, Failed: s.Failed, Skipped: s.Skipped, Tokens: s.Tokens, Active: s.Active, Objects: s.Objects, Bytes: s.Bytes},
+		Summary: summary{Repositories: s.Repos, Files: s.Files, Failed: s.Failed, Skipped: s.Skipped, Tokens: s.Tokens, Active: s.Active, Objects: s.Objects, Bytes: s.Bytes},
 		Results: make([]scan.Result, len(results)),
 	}
 	for i, r := range results {

@@ -138,8 +138,60 @@ func TestRunExitCodes(t *testing.T) {
 		t.Fatalf("an ignored finding leaves a clean exit: %v\n%s", err, out)
 	}
 
-	_, stderr, err := execute(t, "--cache-dir", cache, t.TempDir())
-	if !errors.As(err, &ec) || int(ec) != ExitError || !strings.Contains(stderr, "failed:") {
-		t.Fatalf("a target that is not a repository exits %d: %v\n%s", ExitError, err, stderr)
+	// A directory that is not a repository is scanned as files: empty, it is clean.
+	if out, _, err := execute(t, "--cache-dir", cache, t.TempDir()); err != nil || !strings.Contains(out, "No credentials found in 1 target, 0 files") {
+		t.Fatalf("an empty directory is a clean scan: %v\n%s", err, out)
+	}
+
+	// A path that exists nowhere is reported as an error, with code 2.
+	_, _, err = execute(t, "--cache-dir", cache, filepath.Join(cache, "no such dir"))
+	if code, rerr := exit(err); code != ExitError || rerr == nil || !strings.Contains(rerr.Error(), "neither a path") {
+		t.Fatalf("a missing path exits %d with an error: %d, %v", ExitError, code, rerr)
+	}
+
+	// A local repository stays a repository: the token in an untracked file
+	// is not seen without --files, and is seen with it.
+	if err := os.WriteFile(filepath.Join(dir, "untracked.env"), []byte("OTHER="+token('o', "UntrackedUntrackedUntrackedUnt")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, _, _ = execute(t, "--cache-dir", cache, dir)
+	if !strings.Contains(out, "1 credential found in 1 repository") {
+		t.Fatalf("without --files:\n%s", out)
+	}
+	out, _, _ = execute(t, "--files", "--cache-dir", cache, dir)
+	if !strings.Contains(out, "2 credentials found in 1 repository") || !strings.Contains(out, "untracked.env:1\n") || !strings.Contains(out, "in the working tree") {
+		t.Fatalf("with --files:\n%s", out)
+	}
+}
+
+func TestRunScansDirectoriesAndFilesOnDisk(t *testing.T) {
+	hermetic(t)
+	tok := token('p', "OnDiskOnDiskOnDiskOnDiskOnDisk")
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("GITHUB_TOKEN="+tok+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if needsGitHub([]string{dir, filepath.Join(dir, ".env")}) || !needsGitHub([]string{dir, "acme/api"}) {
+		t.Fatal("existing paths are local, anything else needs GitHub")
+	}
+
+	out, _, err := execute(t, "--json", "--cache-dir", t.TempDir(), dir)
+	var ec exitCode
+	if !errors.As(err, &ec) || int(ec) != ExitFindings {
+		t.Fatalf("a finding on disk exits %d: %v", ExitFindings, err)
+	}
+	var doc report.Output
+	if err := json.Unmarshal([]byte(out), &doc); err != nil || len(doc.Results) != 1 || len(doc.Results[0].Findings) != 1 {
+		t.Fatalf("json: %v\n%s", err, out)
+	}
+	res := doc.Results[0]
+	loc := res.Findings[0].Locations[0]
+	if !res.Files || doc.Summary.Files != 1 || loc.ObjectType != "file" || loc.Path != ".env" || loc.Line != 1 || loc.Commit != nil || strings.Contains(out, tok) {
+		t.Fatalf("result: %+v", res)
+	}
+
+	out, _, err = execute(t, "--cache-dir", t.TempDir(), filepath.Join(dir, ".env"))
+	if !errors.As(err, &ec) || int(ec) != ExitFindings || !strings.Contains(out, "1 credential found in 1 target, 1 file") || !strings.Contains(out, ".env:1\n") || !strings.Contains(out, "on disk") {
+		t.Fatalf("a single file: %v\n%s", err, out)
 	}
 }

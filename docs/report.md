@@ -1,6 +1,6 @@
 # Reading the report
 
-Each distinct credential is listed once, with every place it was found across all scanned repositories:
+Each distinct credential is listed once, with every place it was found across all scanned repositories (the footer says *targets* when a plain directory or file was among them):
 
 ```
 4 credentials found (3 active) in 108 repositories, 82473 objects, 1.5 GiB
@@ -104,6 +104,7 @@ Under the first line, one line per location names the repository, path, introduc
 - **on main, v1.2, PR #7** -- ordinary history; the token is in the repository as anyone clones it. `--all-refs` lists all of them instead of `+405 more`.
 - **only reachable through pull request refs** -- someone rewrote the branch to remove it, but the pull request that carried it still serves the old commits (`refs/pull/N/head`), and so does every fork that was made in between.
 - **orphaned** -- no ref reaches the commit anymore; GitHub still serves it by SHA to anyone who has it (the activity feed, an old notification email, a CI log). When patty knows how it went unreachable, it says so: *force-pushed away from main on 2026-01-06 by jane*.
+- **on disk** / **in the working tree** -- the token sits in a file of a directory that is no repository, or in the working tree of one scanned with `--files`; there is no commit to name and nothing to rewrite, delete the file or the line after revoking. A token found both in history and on disk is one credential with both locations.
 
 ## What to do about it
 

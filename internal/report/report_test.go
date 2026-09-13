@@ -140,7 +140,7 @@ func TestRefs(t *testing.T) {
 		t.Fatalf("Refs = %q", got)
 	}
 	loc := scan.Location{Commit: &gitrepo.Commit{}, Refs: []string{"refs/pull/3/head", "refs/pull/3/merge", "refs/pull/9/head"}}
-	if got := reachability(loc, Options{}); got != "not on any branch or tag, only reachable through pull request refs: PR #3, PR #9" {
+	if got := reachability(loc, Options{}, false); got != "not on any branch or tag, only reachable through pull request refs: PR #3, PR #9" {
 		t.Fatalf("reachability = %q", got)
 	}
 }
@@ -253,10 +253,10 @@ func TestTextShowsAttributionPerProvider(t *testing.T) {
 func TestAllRefs(t *testing.T) {
 	refs := []string{"refs/heads/a", "refs/heads/b", "refs/heads/c", "refs/heads/d", "refs/heads/e", "refs/heads/f", "refs/heads/g"}
 	loc := scan.Location{Commit: &gitrepo.Commit{}, Refs: refs}
-	if got := reachability(loc, Options{}); got != "on a, b, c, d, e, +2 more" {
+	if got := reachability(loc, Options{}, false); got != "on a, b, c, d, e, +2 more" {
 		t.Fatalf("default = %q", got)
 	}
-	if got := reachability(loc, Options{AllRefs: true}); got != "on a, b, c, d, e, f, g" {
+	if got := reachability(loc, Options{AllRefs: true}, false); got != "on a, b, c, d, e, f, g" {
 		t.Fatalf("all = %q", got)
 	}
 }
@@ -366,5 +366,86 @@ func TestUnlocksAdviceShowsDetails(t *testing.T) {
 	want := "acme/infra: 2 files (tls/server.crt: certificate for www.example.com, expires 2030-06-01, issuer Example CA, authorized_keys)"
 	if got := unlocksAdvice(unlocks, "none"); got != want {
 		t.Fatalf("got %q\nwant %q", got, want)
+	}
+}
+
+func TestTextRendersFileLocations(t *testing.T) {
+	commit := &gitrepo.Commit{SHA: "c7655d84dc84a8ac407f36d3cbc562f50e5dfe8a", Author: "Patty", Date: "2026-09-10T11:47:06+02:00", Subject: "add env"}
+	results := []scan.Result{
+		{
+			Target: "./downloads", Files: true,
+			Findings: []scan.Finding{{Provider: "GitHub", Kind: github.KindPAT, Fingerprint: "aaaa", Token: "ghp_SECRET", Redacted: "ghp_S…T", ChecksumVerified: true,
+				Local:     []string{"~/.config/gh/hosts.yml"},
+				Locations: []scan.Location{{Repo: "./downloads", Path: "config/.env", Line: 1, ObjectType: "file"}}}},
+			Stats: scan.Stats{Objects: 3, Scanned: 3, Bytes: 100},
+		},
+		{
+			Target: ".",
+			Findings: []scan.Finding{{Provider: "GitHub", Kind: github.KindPAT, Fingerprint: "aaaa", Token: "ghp_SECRET", Redacted: "ghp_S…T", ChecksumVerified: true,
+				Locations: []scan.Location{
+					{Repo: ".", Path: "deploy.sh", Line: 3, ObjectType: "blob", Commit: commit, Refs: []string{"refs/heads/main"}},
+					{Repo: ".", Path: ".env", Line: 1, ObjectType: "file"},
+				}}},
+			Stats: scan.Stats{Objects: 10, Scanned: 10, Bytes: 2048},
+		},
+	}
+	var buf bytes.Buffer
+	Text(&buf, results, Options{Providers: registry})
+	out := buf.String()
+	for _, want := range []string{
+		"1 credential found in 2 targets, 13 objects",
+		"./downloads  config/.env:1\n                 on disk\n",
+		".  .env:1\n       in the working tree\n",
+		".  deploy.sh:3  c7655d84",
+		"on main",
+		"↳ revoke",
+		"↳ local    still configured in ~/.config/gh/hosts.yml",
+		"↳ history  .: in branch history",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "commit unknown") || strings.Contains(out, "./downloads:") {
+		t.Fatalf("a file has no commit and no history to rewrite:\n%s", out)
+	}
+
+	// Every target a file tree: the footer counts files; a single file
+	// location still gets the revoke advice and no history line.
+	buf.Reset()
+	Text(&buf, results[:1], Options{Providers: registry})
+	out = buf.String()
+	if !strings.Contains(out, "in 1 target, 3 files, 100 B") || !strings.Contains(out, "↳ revoke") || strings.Contains(out, "↳ history") {
+		t.Fatalf("file tree report:\n%s", out)
+	}
+	if s := StatusLine(results[0], Options{}); !strings.Contains(s, "3 files") {
+		t.Fatalf("status line: %q", s)
+	}
+
+	buf.Reset()
+	if err := JSON(&buf, results, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	var doc Output
+	if err := json.Unmarshal(buf.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Summary.Repositories != 2 || doc.Summary.Files != 1 {
+		t.Fatalf("summary: %+v", doc.Summary)
+	}
+	var tree scan.Result
+	for _, r := range doc.Results {
+		if r.Files {
+			tree = r
+		}
+	}
+	if tree.Target != "./downloads" || len(tree.Findings) != 1 {
+		t.Fatalf("file tree result: %+v", tree)
+	}
+	if loc := tree.Findings[0].Locations[0]; loc.ObjectType != "file" || loc.Path != "config/.env" || loc.Commit != nil || loc.Object != "" {
+		t.Fatalf("location: %+v", loc)
+	}
+	if !strings.Contains(buf.String(), `"object_type": "file"`) || !strings.Contains(buf.String(), `"files": true`) {
+		t.Fatalf("json:\n%s", buf.String())
 	}
 }

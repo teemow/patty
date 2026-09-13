@@ -54,9 +54,10 @@ patty acme/api acme/web          # two GitHub repositories
 patty acme --verify              # everything acme owns; say which tokens are still live
 patty acme --revoke              # ...and ask their providers to revoke the live ones, after confirmation
 patty acme --json > leaks.json   # machine-readable report
+patty ~/downloads                # a directory that is no repository: every file on disk
 ```
 
-A target is a local path, `owner/repo`, a github.com URL, or a bare `owner` (user or organization) to scan every repository of, private ones included when the token can see them. Exit code `0` means nothing was found, `1` that tokens were found, `2` that a target failed or was skipped and nothing was found.
+A target is a local path, `owner/repo`, a github.com URL, or a bare `owner` (user or organization) to scan every repository of, private ones included when the token can see them. A local directory that is not a repository, or a single file, is scanned file by file as it is on disk; `--files` does the same for the working tree of a repository, so the untracked and ignored files a history scan never sees are covered. Exit code `0` means nothing was found, `1` that tokens were found, `2` that a target failed or was skipped and nothing was found.
 
 `patty --help` lists every flag. The ones you will reach for:
 
@@ -64,6 +65,7 @@ A target is a local path, `owner/repo`, a github.com URL, or a bare `owner` (use
 - `--ignore fp,fp` -- leave tokens you have already dealt with out of the report, by [fingerprint](docs/report.md#fingerprints) or by kind (`--ignore kubernetes-secret-manifest`)
 - `--keep` -- keep mirrors in the cache so a re-run only fetches what changed; `--max-disk` and `--min-free` cap what the cache may use
 - `--include-forks` -- include forks when expanding an owner
+- `--files` -- also scan the files of a local repository as they are on disk, `.gitignore`d ones included
 
 Other commands: `patty revoke` for tokens you already have in hand, `patty cache` and `patty cache clean` for kept mirrors, `patty self-update`.
 
@@ -95,7 +97,7 @@ Each token is listed once with every place it was found, the oldest commit that 
 3. **Scan objects, not diffs.** Every blob, commit and tag in the object database is read exactly once, reachable or not, and checked for every credential kind patty knows; the [detection table](docs/how-it-works.md#detection) lists them. A format with a built-in checksum is verified offline, so a lookalike in a test fixture is not reported. What a credential's own shape reveals is attributed without asking anyone: the account an AWS key id belongs to, the sops files an age identity decrypts, the certificate, `authorized_keys`, image policy or GitHub account that trusts a private key's public half. The values of every Kubernetes Secret manifest are decoded and searched too, and a Secret committed in the clear is reported on its own.
 4. **Attribute afterwards.** Only for objects that contain a token does patty look up the path, the introducing commit, and the refs that still contain it.
 
-Mirrors live in a size-capped cache and are removed after the scan unless `--keep` is set, so pointing patty at an organization never fills a drive. [How patty works](docs/how-it-works.md) has the details, every credential kind it detects, and a [comparison with gitleaks](docs/how-it-works.md#compared-with-gitleaks).
+Mirrors live in a size-capped cache and are removed after the scan unless `--keep` is set, so pointing patty at an organization never fills a drive. A directory that is not a repository has no history to mirror; its files are [scanned as they are on disk](docs/how-it-works.md#scanning-files). [How patty works](docs/how-it-works.md) has the details, every credential kind it detects, and a [comparison with gitleaks](docs/how-it-works.md#compared-with-gitleaks).
 
 ## Development
 

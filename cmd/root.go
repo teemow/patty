@@ -60,6 +60,7 @@ type flags struct {
 	activityPages   int
 	includeForks    bool
 	includeArchived bool
+	files           bool
 	ignore          []string
 	verbose         bool
 }
@@ -82,8 +83,12 @@ func newRootCmd() *cobra.Command {
 		Short: "Finds leaked credentials in every corner of a repository's history, including the commits a clone never shows",
 		Long: `Patty checks the credentials in your git history -- all of it.
 
-A target is a local repository path, an owner/repo, a github.com URL, or a
-bare owner (user or organization) to scan every repository of.
+A target is a local path, an owner/repo, a github.com URL, or a bare owner
+(user or organization) to scan every repository of. A local repository is
+scanned through its object database, reflog and stashes included; a
+directory that is not a repository, or a single file, is scanned file by
+file as it is on disk, and --files does that for the working tree of a
+repository too, so untracked and ignored files are covered.
 
 GitHub repositories are mirrored into a size-capped cache (all branches,
 tags and pull request refs), extended with commits the repository activity
@@ -139,6 +144,7 @@ a target failed or was skipped and nothing was found.`,
 	f.IntVar(&opts.activityPages, "activity-pages", opts.activityPages, "Activity feed pages (100 events each) to read per repository and event type")
 	f.BoolVar(&opts.includeForks, "include-forks", false, "Include forks when expanding an owner")
 	f.BoolVar(&opts.includeArchived, "include-archived", opts.includeArchived, "Include archived repositories when expanding an owner")
+	f.BoolVar(&opts.files, "files", false, "Also scan the files of a local repository as they are on disk, untracked and ignored ones included (implied for a directory that is not a repository)")
 	f.StringSliceVar(&opts.ignore, "ignore", nil, "Credential fingerprints or kinds to leave out of the report (comma-separated)")
 	f.BoolVarP(&opts.verbose, "verbose", "v", false, "Print progress for each phase")
 	return cmd
@@ -203,12 +209,12 @@ func run(cmd *cobra.Command, args []string, opts flags, registry *detect.Registr
 		return err
 	}
 
-	targets, err := source.Resolve(ctx, client, args, github.ListOptions{IncludeForks: opts.includeForks, IncludeArchived: opts.includeArchived})
+	targets, err := source.Resolve(ctx, client, args, source.Options{ListOptions: github.ListOptions{IncludeForks: opts.includeForks, IncludeArchived: opts.includeArchived}, Files: opts.files})
 	if err != nil {
 		return err
 	}
 	if len(targets) > 1 {
-		_, _ = fmt.Fprintf(stderr, "Scanning %d repositories (cache %s, budget %s)\n", len(targets), cache.Dir, disk.FormatSize(cache.MaxBytes))
+		_, _ = fmt.Fprintf(stderr, "Scanning %d %s (cache %s, budget %s)\n", len(targets), targetsWord(targets), cache.Dir, disk.FormatSize(cache.MaxBytes))
 	}
 
 	ignore := map[string]bool{}
@@ -263,8 +269,19 @@ func run(cmd *cobra.Command, args []string, opts flags, registry *detect.Registr
 	return nil
 }
 
+// targetsWord says what a batch of targets is made of: repositories, or
+// targets when a plain directory or file is among them.
+func targetsWord(targets []source.Target) string {
+	for _, t := range targets {
+		if t.Files() {
+			return "targets"
+		}
+	}
+	return "repositories"
+}
+
 // githubAccess returns the API client and git credentials for the targets
-// that are not local directories, or nil when every target is one.
+// that are not local paths, or nil when every target is one.
 func githubAccess(args []string, stderr io.Writer) (*github.Client, *gitrepo.Auth, error) {
 	if !needsGitHub(args) {
 		return nil, nil, nil
@@ -283,11 +300,11 @@ func githubAccess(args []string, stderr io.Writer) (*github.Client, *gitrepo.Aut
 	return client, auth, nil
 }
 
-// needsGitHub reports whether any target is something other than a local
-// directory.
+// needsGitHub reports whether any target is something other than a path
+// that exists on this machine.
 func needsGitHub(args []string) bool {
 	for _, a := range args {
-		if info, err := os.Stat(a); err != nil || !info.IsDir() {
+		if _, err := os.Stat(a); err != nil {
 			return true
 		}
 	}
