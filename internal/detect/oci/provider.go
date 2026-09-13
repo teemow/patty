@@ -1,4 +1,4 @@
-// Package registry is the provider for OCI and Docker registry credentials:
+// Package oci is the provider for OCI and Docker registry credentials:
 // the logins a Docker config keeps per registry, wherever that config is
 // embedded (a config.json, a Kubernetes pull secret, Helm values, a
 // Basic Authorization header aimed at a registry), and the native tokens of
@@ -16,7 +16,7 @@
 // followed by one token request with the login; no image or manifest is
 // pulled. Only Docker Hub personal access tokens can revoke themselves;
 // every other kind gets the owner's rotation procedure.
-package registry
+package oci
 
 import (
 	"net/http"

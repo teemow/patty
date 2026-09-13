@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-// fake is a provider that finds the word "secret" and reports every kind as
-// revocable, enough to exercise the registry.
+// fake is a provider that finds its own name and marks its kind revocable
+// without being able to revoke it, enough to exercise the registry.
 type fake struct{ name string }
 
 func (f fake) Name() string { return f.name }
@@ -22,8 +22,12 @@ func (f fake) Find(content []byte) []Token {
 func (f fake) Verify(context.Context, Token) Verification {
 	return Verification{Status: StatusActive, Detail: f.name}
 }
-func (fake) Revoke(context.Context, []Token) error { return nil }
-func (fake) LocalSources() LocalSources            { return LocalSources{} }
+func (fake) LocalSources() LocalSources { return LocalSources{} }
+
+// revoking is a fake whose API revokes its credentials.
+type revoking struct{ fake }
+
+func (revoking) Revoke(context.Context, []Token) error { return nil }
 
 // correlating is a fake that also relates its credentials to content.
 type correlating struct{ fake }
@@ -62,7 +66,7 @@ func TestRegistryFindMergesAndNumbersLines(t *testing.T) {
 }
 
 func TestRegistryDispatch(t *testing.T) {
-	r := NewRegistry(fake{"alpha"}, fake{"beta"})
+	r := NewRegistry(revoking{fake{"alpha"}}, fake{"beta"})
 	if len(r.Providers()) != 2 || r.ProviderName("beta-token") != "beta" || r.Provider("beta-token").Name() != "beta" {
 		t.Fatal("provider lookup by kind")
 	}
@@ -71,6 +75,9 @@ func TestRegistryDispatch(t *testing.T) {
 	}
 	if v := r.Verify(context.Background(), Token{Kind: "beta-token"}); v.Status != StatusActive || v.Detail != "beta" {
 		t.Fatalf("verify dispatch: %+v", v)
+	}
+	if r.Revocable("beta-token") || !r.Info("beta-token").Revocable {
+		t.Fatal("a kind is only revocable when its provider is a Revoker")
 	}
 	if r.Revocable("nope") || r.RevokePage("nope") != "" || r.Provider("nope") != nil || r.ProviderName("nope") != "" {
 		t.Fatal("unknown kind must be harmless")

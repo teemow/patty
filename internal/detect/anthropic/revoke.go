@@ -49,7 +49,7 @@ func (k apiKey) describe() string {
 	return strings.Join(parts, ", ")
 }
 
-// Revoke implements detect.Provider by setting each API key to inactive
+// Revoke implements detect.Revoker by setting each API key to inactive
 // through the Admin API, which needs the operator's admin key: Anthropic
 // has no endpoint for reporting a leaked key. The key is found in the
 // organization's key list by the partial hint Anthropic shows for it; a key

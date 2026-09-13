@@ -1,15 +1,14 @@
 package azure
 
 import (
-	"context"
 	"testing"
 
 	"github.com/teemow/patty/internal/detect"
 )
 
-func TestRevoke(t *testing.T) {
+func TestNotRevocable(t *testing.T) {
 	p := provider()
-	if err := p.Revoke(context.Background(), []detect.Token{{Kind: KindClientSecret, Value: clientSecret("Ab1")}}); err == nil {
+	if _, ok := any(p).(detect.Revoker); ok {
 		t.Error("nothing here is revocable by the holder")
 	}
 	for _, k := range p.Kinds() {

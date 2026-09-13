@@ -186,9 +186,9 @@ func TestFindSecretManifests(t *testing.T) {
 	}
 }
 
-func TestRevokeRefuses(t *testing.T) {
-	if err := New().Revoke(t.Context(), []detect.Token{{Kind: KindToken}}); err == nil || !strings.Contains(err.Error(), "no API revokes") {
-		t.Fatalf("revoke: %v", err)
+func TestNotRevocable(t *testing.T) {
+	if _, ok := any(New()).(detect.Revoker); ok {
+		t.Fatal("no API revokes Kubernetes credentials")
 	}
 }
 

@@ -1,4 +1,4 @@
-package registry
+package oci
 
 import (
 	"bytes"
@@ -42,7 +42,7 @@ func (t accessToken) readOnly() bool {
 	return true
 }
 
-// Revoke implements detect.Provider for Docker Hub personal access tokens,
+// Revoke implements detect.Revoker for Docker Hub personal access tokens,
 // the only kind a registry lets patty revoke: the token logs in, obtains a
 // JWT for its account, finds itself in the account's token list and sets
 // itself inactive. A read-only token may not manage tokens and says so. A

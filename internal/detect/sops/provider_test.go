@@ -41,7 +41,7 @@ func TestKindsAndLocalSources(t *testing.T) {
 	}
 }
 
-func TestVerifyAndRevokeContactNothing(t *testing.T) {
+func TestVerifyContactsNothingAndNothingRevokes(t *testing.T) {
 	p := New()
 	for _, kind := range []detect.Kind{KindAge, KindPGP} {
 		v := p.Verify(context.Background(), detect.Token{Kind: kind, Value: "x"})
@@ -49,7 +49,7 @@ func TestVerifyAndRevokeContactNothing(t *testing.T) {
 			t.Fatalf("%s: %+v", kind, v)
 		}
 	}
-	if err := p.Revoke(context.Background(), []detect.Token{{Kind: KindAge}}); err == nil || !strings.Contains(err.Error(), "cannot be revoked") {
-		t.Fatalf("revoke: %v", err)
+	if _, ok := any(p).(detect.Revoker); ok {
+		t.Fatal("age identities and PGP keys have no one to revoke them with")
 	}
 }
