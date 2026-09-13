@@ -102,8 +102,14 @@ func TestFind(t *testing.T) {
 	write("keys/deploy.json", gcpADC(fileTok))
 	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", filepath.Join(cfg, "keys", "deploy.json"))
 
+	// An Azure storage key is only a finding next to its account, which
+	// another variable names; the variables are searched together.
+	storageKey := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k3y", 21) + "!"))
+	t.Setenv("AZURE_STORAGE_ACCOUNT", "examplestorage")
+	t.Setenv("AZURE_STORAGE_KEY", storageKey)
+
 	got := Match(Find(context.Background(), providers.Default()))
-	if len(got) != 11 {
+	if len(got) != 12 {
 		t.Fatalf("Match = %v", got)
 	}
 	if src := got[detect.Fingerprint("quay.io/acme+ci")]; len(src) != 1 || src[0] != "~/.docker/config.json" {
@@ -129,6 +135,9 @@ func TestFind(t *testing.T) {
 	}
 	if src := got[detect.Fingerprint(slackEnv)]; len(src) != 1 || src[0] != "$SLACK_BOT_TOKEN" {
 		t.Errorf("slack env token sources = %v", src)
+	}
+	if src := got[detect.Fingerprint(storageKey)]; len(src) != 1 || src[0] != "$AZURE_STORAGE_KEY" {
+		t.Errorf("storage key sources = %v", src)
 	}
 	if src := got[detect.Fingerprint(adcTok)]; len(src) != 1 || src[0] != "~/.config/gcloud/application_default_credentials.json" {
 		t.Errorf("gcloud ADC sources = %v", src)

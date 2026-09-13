@@ -5,8 +5,12 @@
 // Each provider says where its tools keep tokens: environment variables
 // holding a token or naming a file, files under the config and home
 // directories, commands that print one. The working directory's .env files
-// are checked for every provider. Only fingerprints leave this package;
-// token values are hashed as soon as they are read.
+// are checked for every provider. The environment variables are searched
+// together, as the lines of one document, so a credential that is only
+// complete with a companion from another variable (a storage key and its
+// account name, an AWS key id and its secret) is found the way it would be
+// in an .env file. Only fingerprints leave this package; token values are
+// hashed as soon as they are read.
 package localcreds
 
 import (
@@ -38,23 +42,25 @@ var cwdFiles = []string{".env", ".env.*", ".envrc", ".npmrc"}
 func Find(ctx context.Context, registry *detect.Registry) []Credential {
 	seen := map[string]bool{}
 	var out []Credential
+	record := func(fp, source string) {
+		if !seen[fp+source] {
+			seen[fp+source] = true
+			out = append(out, Credential{Fingerprint: fp, Source: source})
+		}
+	}
 	add := func(content []byte, source string) {
 		for _, tok := range registry.Find(content) {
-			fp := tok.Fingerprint()
-			if !seen[fp+source] {
-				seen[fp+source] = true
-				out = append(out, Credential{Fingerprint: fp, Source: source})
-			}
+			record(tok.Fingerprint(), source)
 		}
 	}
 	var sources []detect.LocalSources
 	for _, p := range registry.Providers() {
 		sources = append(sources, p.LocalSources())
 	}
-	for _, s := range sources {
-		for _, name := range s.Env {
-			if v := os.Getenv(name); v != "" {
-				add([]byte(v), "$"+name)
+	for _, tok := range registry.Find(environment(sources)) {
+		for _, name := range envNames(sources) {
+			if v := os.Getenv(name); v != "" && strings.Contains(v, tok.Value) {
+				record(tok.Fingerprint(), "$"+name)
 			}
 		}
 	}
@@ -73,6 +79,26 @@ func Find(ctx context.Context, registry *detect.Registry) []Credential {
 		}
 	}
 	return out
+}
+
+// environment renders the providers' environment variables as one
+// NAME=value document, in the order the providers list them.
+func environment(sources []detect.LocalSources) []byte {
+	var b strings.Builder
+	for _, name := range envNames(sources) {
+		if v := os.Getenv(name); v != "" {
+			b.WriteString(name + "=" + v + "\n")
+		}
+	}
+	return []byte(b.String())
+}
+
+func envNames(sources []detect.LocalSources) []string {
+	var names []string
+	for _, s := range sources {
+		names = append(names, s.Env...)
+	}
+	return names
 }
 
 // Match indexes credentials by fingerprint: the sources each token is
