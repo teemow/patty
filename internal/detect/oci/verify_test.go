@@ -121,3 +121,22 @@ func TestParseChallenge(t *testing.T) {
 		t.Errorf("empty challenge: %q %v", scheme, params)
 	}
 }
+
+func TestVerifyLoginRegistryThatDeniesWith403(t *testing.T) {
+	reg := newFakeRegistry(t, false, map[string]string{"alice": "correct-horse"})
+	reg.denyAll = true
+	p := provider(reg, nil)
+	ctx := context.Background()
+	if v := p.Verify(ctx, login(reg.host(), "alice", "wrong")); v.Status != detect.StatusRevoked || !strings.Contains(v.Detail, "HTTP 403") {
+		t.Errorf("a 403 that a request without credentials gets too is a rejection: %+v", v)
+	}
+	if got := reg.requests(); len(got) != 3 || got[2] != "/token?service=fake-registry" {
+		t.Errorf("settling the 403 costs one token request without credentials, got %v", got)
+	}
+	if v := p.Verify(ctx, login(reg.host(), "alice", "correct-horse")); v.Status != detect.StatusActive {
+		t.Errorf("live login: %+v", v)
+	}
+	if v := p.Verify(ctx, detect.Token{Kind: KindRegistryLogin, Value: "${{ env.REGISTRY }}/${{ github.actor }}", Secret: "pw"}); v.Status != detect.StatusUnverifiable || !strings.Contains(v.Detail, "deploy time") {
+		t.Errorf("templated registry: %+v", v)
+	}
+}

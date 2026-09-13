@@ -174,8 +174,8 @@ func deployUser(content []byte) (secret, attribution string) {
 // Instances implements detect.InstanceObserver: every host with a
 // `gitlab` label in content, the way a self-managed GitLab is usually
 // named (gitlab.example.com), as it was written, with its scheme and
-// port. gitlab.com is tried anyway, and its subdomains and gitlab.io are
-// the vendor's own sites, not an instance.
+// port. gitlab.com is tried anyway, and its subdomains, gitlab.io and a
+// GitHub Pages site are the vendor's own sites, not an instance.
 func (*Provider) Instances(content []byte) []string {
 	return detect.ScanHosts(content, "gitlab.", func(host string) bool {
 		return !vendorHost(host)
@@ -183,7 +183,7 @@ func (*Provider) Instances(content []byte) []string {
 }
 
 func vendorHost(host string) bool {
-	for _, suffix := range []string{"gitlab.com", "gitlab.io", "gitlab.net"} {
+	for _, suffix := range []string{"gitlab.com", "gitlab.io", "gitlab.net", "github.io"} {
 		if host == suffix || strings.HasSuffix(host, "."+suffix) {
 			return true
 		}

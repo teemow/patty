@@ -79,7 +79,7 @@ func (p *Provider) Verify(ctx context.Context, tok detect.Token) detect.Verifica
 				return detect.Verification{Status: detect.StatusRevoked, Detail: "the server refused the certificate in the TLS handshake (" + alert + ")"}
 			}
 		}
-		return unknown("server not reachable from here: " + err.Error())
+		return detect.Unreachable("server", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body := detect.ReadBody(resp.Body, 1<<20)

@@ -261,12 +261,23 @@ func decodeValue(v *yaml.Node, encoded bool) ([]byte, string) {
 		return nil, "empty"
 	case strings.HasPrefix(raw, "ENC["):
 		return nil, "encrypted"
-	case templated(raw):
+	case Templated(raw):
 		return nil, "templated"
 	}
-	if !encoded {
-		return []byte(raw), ""
+	material := []byte(raw)
+	if encoded {
+		var skipped string
+		if material, skipped = decodeBase64Value(raw); skipped != "" {
+			return nil, skipped
+		}
 	}
+	if Placeholder(string(material)) {
+		return nil, "placeholder"
+	}
+	return material, ""
+}
+
+func decodeBase64Value(raw string) ([]byte, string) {
 	raw = strings.Join(strings.Fields(raw), "")
 	dec, err := base64.StdEncoding.DecodeString(raw)
 	if err != nil {
@@ -280,9 +291,37 @@ func decodeValue(v *yaml.Node, encoded bool) ([]byte, string) {
 	return dec, ""
 }
 
-// templated reports whether a value is a placeholder for something filled
-// in at deploy time: a Helm or Go template, a shell or kustomize variable,
-// a Helm values reference.
-func templated(s string) bool {
+// Templated reports whether a value is filled in at deploy time rather
+// than written down: a Helm or Go template, a shell, kustomize or GitHub
+// Actions expression, a Helm values reference.
+func Templated(s string) bool {
 	return strings.Contains(s, "{{") || strings.Contains(s, "${") || strings.Contains(s, ".Values")
+}
+
+// placeholderWords are the words people write where the secret goes
+// later, compared without case, dashes, underscores and spaces.
+var placeholderWords = Set([]string{"replaceme", "changeme", "changeit", "placeholder", "todo", "tbd", "fixme", "dummy"})
+
+// Placeholder reports whether a short value stands in for a secret rather
+// than being one: `<your token>`, REPLACE_ME, changeme, a run of x's or
+// stars, or an upper-case REPLACE_WITH_…, CHANGE_…, YOUR_…_HERE.
+func Placeholder(s string) bool {
+	if s == "" || len(s) > 64 {
+		return false
+	}
+	if s[0] == '<' && s[len(s)-1] == '>' || strings.Trim(s, "xX") == "" || strings.Trim(s, "*") == "" {
+		return true
+	}
+	if placeholderWords[strings.NewReplacer("-", "", "_", "", " ", "").Replace(strings.ToLower(s))] {
+		return true
+	}
+	if strings.ToUpper(s) != s {
+		return false
+	}
+	for _, prefix := range []string{"REPLACE_", "CHANGE_", "YOUR_", "TODO_", "FIXME_"} {
+		if strings.HasPrefix(s, prefix) {
+			return true
+		}
+	}
+	return false
 }

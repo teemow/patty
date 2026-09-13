@@ -134,11 +134,12 @@ func TestInstances(t *testing.T) {
 url: https://grafana.example.com/api/dashboards
 metrics: http://grafana.internal.example.com:3000
 cloud: https://acme.grafana.net
-docs: https://grafana.com/docs and https://play.grafana.org
-bare grafana.example.com again, and mygrafana.example.com, grafana.local
+docs: https://grafana.com/docs and https://play.grafana.org and https://grafana.github.io/
+bare grafana.example.com again, and mygrafana.example.com, grafana.local, grafana.home
+files: grafana.yaml grafana.ini grafana.yml; secret grafana.example.com-tls
 `)
 	got := New().Instances(content)
-	want := []string{"https://grafana.example.com", "http://grafana.internal.example.com:3000", "https://acme.grafana.net", "https://grafana.local"}
+	want := []string{"https://grafana.example.com", "http://grafana.internal.example.com:3000", "https://acme.grafana.net"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Instances = %v, want %v", got, want)
 	}

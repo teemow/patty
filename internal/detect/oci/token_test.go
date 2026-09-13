@@ -268,3 +268,16 @@ func TestKindsAreComplete(t *testing.T) {
 		}
 	}
 }
+
+func TestFindTemplatedLogins(t *testing.T) {
+	filled := config(t, map[string]map[string]string{"${{ env.REGISTRY }}": {"username": "${{ github.actor }}", "password": "${{ secrets.GITHUB_TOKEN }}"}}, nil)
+	if got := find([]byte(filled)); got != nil {
+		t.Errorf("a password filled in when the workflow runs is not a credential, got %+v", got)
+	}
+	leaked := config(t, map[string]map[string]string{"${{ env.REGISTRY }}": {"username": "ci", "password": "hunter2hunter2"}}, nil)
+	got := find([]byte(leaked))
+	if len(got) != 1 {
+		t.Fatalf("a real password behind a templated host is one login, got %+v", got)
+	}
+	want(t, got, KindRegistryLogin, "${{ env.REGISTRY }}/ci", "hunter2hunter2")
+}
