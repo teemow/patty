@@ -2,6 +2,10 @@ package detect
 
 import (
 	"context"
+	"errors"
+	"net"
+	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -109,5 +113,28 @@ func TestRedactAndFingerprint(t *testing.T) {
 func TestIssuer(t *testing.T) {
 	if (Verification{App: "GitHub CLI", ClientID: "x"}).Issuer() != "GitHub CLI" || (Verification{ClientID: "x"}).Issuer() != "OAuth app x" || (Verification{}).Issuer() != "" {
 		t.Fatal("issuer")
+	}
+}
+
+func TestUnreachable(t *testing.T) {
+	dns := &url.Error{Op: "Get", URL: "https://grafana.example.invalid/api/user", Err: &net.OpError{Op: "dial", Net: "tcp", Err: &net.DNSError{Err: "no such host", Name: "grafana.example.invalid", IsNotFound: true}}}
+	if v := Unreachable("grafana.example.invalid", dns); v.Status != StatusUnknown || v.Detail != "grafana.example.invalid not reachable from here: no such host" {
+		t.Errorf("dns: %+v", v)
+	}
+	tls := &url.Error{Op: "Get", URL: "https://a.example.invalid/", Err: errors.New("tls: failed to verify certificate")}
+	if v := Unreachable("a.example.invalid", tls); v.Detail != "a.example.invalid not reachable from here: tls: failed to verify certificate" {
+		t.Errorf("tls: %+v", v)
+	}
+	if v := Unreachable("server", errors.New("connection refused")); v.Detail != "server not reachable from here: connection refused" {
+		t.Errorf("plain: %+v", v)
+	}
+}
+
+func TestScanHostsWantsAPublicTopLevelDomain(t *testing.T) {
+	content := []byte("grafana.yaml grafana.ini grafana.home grafana.local grafana.example.com-tls https://grafana.example.com:3000/ grafana.home.arpa")
+	got := ScanHosts(content, "grafana.", func(string) bool { return true })
+	want := []string{"https://grafana.example.com:3000", "https://grafana.home.arpa"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ScanHosts = %v, want %v", got, want)
 	}
 }

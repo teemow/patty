@@ -120,8 +120,8 @@ func (d *decoder) auths(content []byte, i, base int, encoded bool) {
 				d.consume(at(e.Auth), len(e.Auth))
 			}
 		}
-		if pass == "" {
-			continue
+		if pass == "" || detect.Templated(pass) {
+			continue // a workflow that writes its config with the secret filled in at run time
 		}
 		d.logins = append(d.logins, Login{Host: cleanHost(host), Username: user, Password: pass, Offset: at(strconv.Quote(host)), Encoded: encoded || fromAuth})
 	}

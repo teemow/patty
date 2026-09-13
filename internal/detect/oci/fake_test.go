@@ -20,6 +20,9 @@ import (
 type fakeRegistry struct {
 	*httptest.Server
 	basicOnly bool
+	// denyAll makes the registry answer 403 to a login it does not know
+	// and to no credentials alike, as ghcr.io does; set before any request.
+	denyAll bool
 	// logins maps username to password.
 	logins map[string]string
 	mu     sync.Mutex
@@ -75,7 +78,7 @@ func (f *fakeRegistry) serve(w http.ResponseWriter, r *http.Request) {
 func (f *fakeRegistry) answer(w http.ResponseWriter, user, pass string, token bool) {
 	switch {
 	case f.logins[user] == "" || f.logins[user] != pass:
-		w.WriteHeader(http.StatusUnauthorized)
+		w.WriteHeader(f.rejection())
 	case user == "forbidden":
 		w.WriteHeader(http.StatusForbidden)
 	case token:
@@ -83,6 +86,14 @@ func (f *fakeRegistry) answer(w http.ResponseWriter, user, pass string, token bo
 	default:
 		w.WriteHeader(http.StatusOK)
 	}
+}
+
+// rejection is the status an unknown login gets.
+func (f *fakeRegistry) rejection() int {
+	if f.denyAll {
+		return http.StatusForbidden
+	}
+	return http.StatusUnauthorized
 }
 
 func (f *fakeRegistry) requests() []string {

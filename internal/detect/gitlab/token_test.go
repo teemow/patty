@@ -195,6 +195,7 @@ func TestInstances(t *testing.T) {
 remote: https://gitlab.example.com/acme/app.git
 mirror: http://gitlab.internal.example.com:8443/acme
 also gitlab.com, https://registry.gitlab.com, https://docs.gitlab.com, acme.gitlab.io, mygitlab.example.com
+not instances: gitlab.yml, gitlab.local, gitlab.github.io, gitlab.example.com-tls
 `)
 	got := New().Instances(content)
 	want := []string{"https://gitlab.example.com", "http://gitlab.internal.example.com:8443"}

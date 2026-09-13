@@ -87,7 +87,7 @@ type patInfo struct {
 func (p *Provider) checkPAT(ctx context.Context, instance, token string) detect.Verification {
 	resp, err := p.do(ctx, http.MethodGet, instance+selfPath, token, "")
 	if err != nil {
-		return detect.Unknown(detect.HostOf(instance) + " not reachable from here: " + err.Error())
+		return detect.Unreachable(detect.HostOf(instance), err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	host := detect.HostOf(instance)
@@ -122,7 +122,7 @@ func (p *Provider) checkPAT(ctx context.Context, instance, token string) detect.
 func (p *Provider) checkRunner(ctx context.Context, instance, token string) detect.Verification {
 	resp, err := p.do(ctx, http.MethodPost, instance+runnerPath, "", "token="+token)
 	if err != nil {
-		return detect.Unknown(detect.HostOf(instance) + " not reachable from here: " + err.Error())
+		return detect.Unreachable(detect.HostOf(instance), err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	host := detect.HostOf(instance)
@@ -153,7 +153,7 @@ func (p *Provider) checkDeploy(ctx context.Context, instance, username, token st
 	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(username+":"+token)))
 	resp, err := detect.Do(p.Client, req)
 	if err != nil {
-		return detect.Unknown(detect.HostOf(instance) + " not reachable from here: " + err.Error())
+		return detect.Unreachable(detect.HostOf(instance), err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	host := detect.HostOf(instance)

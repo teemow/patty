@@ -155,7 +155,7 @@ func decodeBase64(s string) ([]byte, bool) {
 // `grafana` label in content, the way a Grafana is usually named
 // (grafana.example.com, example.grafana.net), as it was written, with its
 // scheme and port. grafana.com and its subdomains are the vendor's own
-// sites, not an instance.
+// sites, grafana.github.io its GitHub Pages, not an instance.
 func (*Provider) Instances(content []byte) []string {
 	return detect.ScanHosts(content, "grafana.", func(host string) bool {
 		return !vendorHost(host)
@@ -163,7 +163,7 @@ func (*Provider) Instances(content []byte) []string {
 }
 
 func vendorHost(host string) bool {
-	for _, suffix := range []string{"grafana.com", "grafana.org"} {
+	for _, suffix := range []string{"grafana.com", "grafana.org", "github.io"} {
 		if host == suffix || strings.HasSuffix(host, "."+suffix) {
 			return true
 		}

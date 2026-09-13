@@ -82,6 +82,16 @@ func TestSecretsSkipsWhatIsNotMaterial(t *testing.T) {
 			}
 		}
 	}
+	ph := manifest("", "ph", map[string]string{"a": "REPLACE_ME", "b": "<your token here>"}, map[string]string{"c": "changeme", "d": "xxxxxxxx", "e": "CHANGE_BEFORE_DEPLOY", "f": "REPLACEMENT-PART-42"}, "")
+	got = Secrets([]byte(ph))
+	if len(got) != 1 || len(got[0].Plaintext()) != 1 || got[0].Plaintext()[0].Key != "f" {
+		t.Fatalf("placeholder secret: %+v", got)
+	}
+	for _, v := range got[0].Values {
+		if v.Key != "f" && v.Skipped != "placeholder" {
+			t.Errorf("%s: %+v", v.Key, v)
+		}
+	}
 	huge := manifest("", "big", map[string]string{"blob": strings.Repeat("x", maxSecretValue+1)}, nil, "")
 	if got = Secrets([]byte(huge)); len(got) != 1 || got[0].Values[0].Skipped != "too large" {
 		t.Fatalf("oversized value: %+v", got)
@@ -188,5 +198,26 @@ func TestRegistryAllowPrivateServers(t *testing.T) {
 	r.AllowPrivateServers(true)
 	if !allow {
 		t.Fatal("the setting must reach every ServerVerifier")
+	}
+}
+
+func TestTemplatedAndPlaceholder(t *testing.T) {
+	for _, s := range []string{"{{ .Values.x }}", "${TOKEN}", "${{ secrets.T }}", ".Values.token"} {
+		if !Templated(s) {
+			t.Errorf("%q is templated", s)
+		}
+	}
+	if Templated("plain-value") {
+		t.Error("a plain value is not templated")
+	}
+	for _, s := range []string{"<token>", "REPLACE_ME", "replace-me", "changeme", "CHANGEIT", "TODO", "xxx", "XXXXXXXX", "****", "YOUR_API_KEY_HERE", "TODO_FILL_IN", "placeholder", "dummy"} {
+		if !Placeholder(s) {
+			t.Errorf("%q is a placeholder", s)
+		}
+	}
+	for _, s := range []string{"", "x-ray", "REPLACEMENT-PART-42", "your_token_value_1", "Todo list", "hunter2", "<a>b", strings.Repeat("X", 65)} {
+		if Placeholder(s) {
+			t.Errorf("%q is not a placeholder", s)
+		}
 	}
 }

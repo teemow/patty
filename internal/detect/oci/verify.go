@@ -23,8 +23,10 @@ const hubLoginPath = "/v2/users/login"
 // registry's /v2/ endpoint to learn where it hands out tokens, then one
 // token request with the login and no scope. Docker Hub logins and tokens
 // go to hub.docker.com's login endpoint instead, Quay OAuth tokens to the
-// Quay API. Only an explicit 401 counts as revoked; a 403 is a live
-// credential that may not do what was asked.
+// Quay API. A 401 is revoked; a 403 is a live credential that may not do
+// what was asked, unless the registry answers a request without any
+// credentials with 403 as well, as ghcr.io does: then the login was not
+// accepted either.
 func (p *Provider) Verify(ctx context.Context, tok detect.Token) detect.Verification {
 	switch tok.Kind {
 	case KindHubPAT, KindHubOAT:
@@ -40,6 +42,9 @@ func (p *Provider) Verify(ctx context.Context, tok detect.Token) detect.Verifica
 	host, user, _ := strings.Cut(tok.Value, "/")
 	if tok.Secret == "" {
 		return detect.Verification{Status: detect.StatusUnverifiable, Detail: "password not found"}
+	}
+	if detect.Templated(host) {
+		return detect.Verification{Status: detect.StatusUnverifiable, Detail: "the registry is filled in at deploy time (" + host + "), nobody to ask"}
 	}
 	if isHub(host) {
 		return p.hubLogin(ctx, user, tok.Secret)
@@ -102,10 +107,27 @@ func (p *Provider) login(ctx context.Context, host, user, password string) detec
 	case http.StatusUnauthorized:
 		return detect.Verification{Status: detect.StatusRevoked}
 	case http.StatusForbidden:
-		return detect.Verification{Status: detect.StatusActive, Detail: where + ", accepted but forbidden to request a token (HTTP 403)"}
+		return p.forbidden(ctx, target, host, where)
 	default:
 		return unknown(fmt.Sprintf("HTTP %d from the token endpoint of %s", resp.StatusCode, host))
 	}
+}
+
+// forbidden settles a 403 from the token endpoint with one more request,
+// without credentials. A registry that knows the login but will not hand
+// it a token answers the login 403 and no credentials 401: the login is
+// live. ghcr.io answers 403 to a wrong password and to no password alike,
+// so a login that gets the same answer as no credentials was rejected.
+func (p *Provider) forbidden(ctx context.Context, target, host, where string) detect.Verification {
+	anon, err := p.get(ctx, target, "")
+	if err != nil {
+		return unknown(err.Error())
+	}
+	_ = anon.Body.Close()
+	if anon.StatusCode == http.StatusForbidden {
+		return detect.Verification{Status: detect.StatusRevoked, Detail: host + " rejects it (HTTP 403, the same answer a request without credentials gets)"}
+	}
+	return detect.Verification{Status: detect.StatusActive, Detail: where + ", accepted but forbidden to request a token (HTTP 403)"}
 }
 
 // hubLogin checks a Docker Hub username with a password or token against

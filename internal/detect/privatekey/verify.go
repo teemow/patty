@@ -84,7 +84,7 @@ func (p *Provider) verifySSH(ctx context.Context, tok detect.Token) detect.Verif
 	dialer := net.Dialer{Timeout: p.Timeout}
 	conn, err := dialer.DialContext(ctx, "tcp", p.SSHAddr)
 	if err != nil {
-		return unknown(host + " not reachable from here: " + err.Error())
+		return detect.Unreachable(host, err)
 	}
 	defer func() { _ = conn.Close() }()
 	if p.Timeout > 0 {
@@ -99,7 +99,7 @@ func (p *Provider) verifySSH(ctx context.Context, tok detect.Token) detect.Verif
 	case strings.Contains(err.Error(), "ssh: unable to authenticate"):
 		return detect.Verification{Status: detect.StatusRevoked, Detail: host + " rejects it: on no account and no deploy key"}
 	default:
-		return unknown(host + " not reachable from here: " + err.Error())
+		return detect.Unreachable(host, err)
 	}
 	detail := "accepted by " + host
 	if login := p.loginOf(tok.Value); login != "" {

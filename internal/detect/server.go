@@ -3,9 +3,12 @@ package detect
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net"
 	"net/url"
 	"strings"
+
+	"golang.org/x/net/publicsuffix"
 )
 
 // PrivateServersFlag is the flag that lets verification reach private
@@ -54,7 +57,7 @@ func (p ServerPolicy) Admit(ctx context.Context, server string) (Verification, b
 			}
 		}
 		if ips, err = lookup(ctx, host); err != nil {
-			return Unknown("server not reachable from here: " + err.Error()), false
+			return Unreachable(host, err), false
 		}
 	}
 	for _, ip := range ips {
@@ -73,6 +76,25 @@ func isPrivate(ip net.IP) bool {
 // the reason.
 func Unknown(detail string) Verification {
 	return Verification{Status: StatusUnknown, Detail: detail}
+}
+
+// Unreachable is the verdict for a request that got no answer from where:
+// the DNS answer (no such host) or the TLS or transport error, without the
+// URL the request was aimed at, which where already names.
+func Unreachable(where string, err error) Verification {
+	return Unknown(where + " not reachable from here: " + reachError(err))
+}
+
+func reachError(err error) string {
+	var dns *net.DNSError
+	if errors.As(err, &dns) {
+		return dns.Err
+	}
+	var u *url.Error
+	if errors.As(err, &u) {
+		return u.Err.Error()
+	}
+	return err.Error()
 }
 
 // AcrossInstances verifies a credential that is bound to one of several
@@ -122,9 +144,10 @@ func HostOf(server string) string {
 // that accept admits, and returns the origins they were written under,
 // each once: the scheme when the host followed one (`https://`,
 // `http://`), https otherwise, and the port when one was written. A host
-// is a run of letters, digits, dots and dashes with at least one dot and
-// no empty label; the needle has to start a label or end one, so
-// `grafana.` matches grafana.example.com and not mygrafana.example.com.
+// is a run of letters, digits, dots and dashes with at least one dot, no
+// empty label and a public top-level domain; the needle has to start a
+// label or end one, so `grafana.` matches grafana.example.com and not
+// mygrafana.example.com.
 func ScanHosts(content []byte, needle string, accept func(host string) bool) []string {
 	var out []string
 	seen := map[string]bool{}
@@ -159,7 +182,11 @@ func ScanHosts(content []byte, needle string, accept func(host string) bool) []s
 func isHostByte(c byte) bool { return IsAlnum(c) || c == '.' || c == '-' }
 
 // validHost reports whether host is a name with at least two non-empty
-// labels that neither start nor end with a dash.
+// labels that neither start nor end with a dash, under a top-level domain
+// ICANN delegates: grafana.yaml is a file, grafana.local an mDNS name and
+// grafana.example.com-tls a Secret, none of them a host anyone reaches
+// from here. An instance under an internal domain is the operator's to
+// name.
 func validHost(host string) bool {
 	labels := strings.Split(host, ".")
 	if len(labels) < 2 {
@@ -170,7 +197,8 @@ func validHost(host string) bool {
 			return false
 		}
 	}
-	return true
+	_, icann := publicsuffix.PublicSuffix(labels[len(labels)-1])
+	return icann
 }
 
 // labelStart reports whether offset is the beginning of a label of host.

@@ -46,7 +46,7 @@ func (p *Provider) Verify(ctx context.Context, tok detect.Token) detect.Verifica
 func (p *Provider) checkInstance(ctx context.Context, instance, token string) detect.Verification {
 	resp, err := p.get(ctx, strings.TrimRight(instance, "/")+userPath, token)
 	if err != nil {
-		return detect.Unknown(detect.HostOf(instance) + " not reachable from here: " + err.Error())
+		return detect.Unreachable(detect.HostOf(instance), err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	host := detect.HostOf(instance)
