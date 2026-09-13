@@ -60,7 +60,7 @@ A target is a local path, `owner/repo`, a github.com URL, or a bare `owner` (use
 
 `patty --help` lists every flag. The ones you will reach for:
 
-- `--verify` -- ask GitHub, Slack, AWS, Anthropic, OpenAI, the registries and the API servers named in kubeconfigs which credentials are still **active**; `--revoke` then revokes those, after asking (`--yes` skips the question). API servers on private networks are only contacted with [`--verify-private-servers`](docs/report.md#verifying-against-api-servers)
+- `--verify` -- ask GitHub, Slack, AWS, Google Cloud, Azure, Anthropic, OpenAI, the registries and the API servers named in kubeconfigs which credentials are still **active**; `--revoke` then revokes those, after asking (`--yes` skips the question). API servers on private networks are only contacted with [`--verify-private-servers`](docs/report.md#verifying-against-api-servers)
 - `--ignore fp,fp` -- leave tokens you have already dealt with out of the report, by [fingerprint](docs/report.md#fingerprints) or by kind (`--ignore kubernetes-secret-manifest`)
 - `--keep` -- keep mirrors in the cache so a re-run only fetches what changed; `--max-disk` and `--min-free` cap what the cache may use
 - `--include-forks` -- include forks when expanding an owner
