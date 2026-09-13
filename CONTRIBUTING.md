@@ -24,7 +24,7 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 
 ## Adding a provider
 
-A provider is one package under `internal/detect/<name>/`. `internal/detect/slack` is the smallest complete example; `internal/detect/privatekey` implements every correlation interface, `internal/detect/kubernetes` verifies against servers named in the scanned content, `internal/detect/anthropic` takes operator configuration, and `internal/detect/oci` (container registries) is handed the other providers because a registry password may be one of their credentials.
+A provider is one package under `internal/detect/<name>/`. `internal/detect/slack` is the smallest complete example; `internal/detect/privatekey` implements every correlation interface, `internal/detect/kubernetes` verifies against servers named in the scanned content, `internal/detect/grafana` and `internal/detect/gitlab` against instances the repository names anywhere, `internal/detect/anthropic` takes operator configuration, and `internal/detect/oci` (container registries) is handed the other providers because a registry password may be one of their credentials.
 
 ### Files
 
@@ -52,14 +52,15 @@ Implement these on the same type when the provider needs them; the registry disc
 
 | Interface | When | Implemented by |
 |-----------|------|----------------|
-| `Revoker` (`Revoke`) | The provider's API revokes credentials. A nil error means every request was accepted; the caller confirms the outcome with `Verify`, so do not claim success the provider did not report. Without it the registry treats none of the provider's kinds as revocable, whatever their `KindInfo` says | every provider except Azure, sops, Kubernetes and private key |
+| `Revoker` (`Revoke`) | The provider's API revokes credentials. A nil error means every request was accepted; the caller confirms the outcome with `Verify`, so do not claim success the provider did not report. Without it the registry treats none of the provider's kinds as revocable, whatever their `KindInfo` says | every provider except Azure, sops, Kubernetes, private key, Grafana and PagerDuty |
 | `Correlator` (`Observe`, `Identifiers`) | The credential unlocks content that may sit in the scanned repositories: `Observe` runs on every object and returns the identifiers it names (sops recipients, public keys), `Identifiers` says what a credential is known as. `Observe` must be cheap and must not keep a reference to its argument | sops, private key |
 | `CommitterCorrelator` (`Committers`) | A match can also come from what the hosting service publishes about the repository's committers, such as an account's SSH keys | private key |
 | `ProximityCorrelator` (`Adjacent`) | The credential says nothing about its public half, so it adopts a sighting from its own directory | private key |
 | `PathClassifier` (`Classify`) | The kind depends on where the credential lives or what names it, and is settled after attribution | private key |
-| `Configurable` (`Configure`) | The provider takes a privileged credential of the operator's own from the environment, an organization's admin key, and `Kinds` may depend on it. `patty kinds` marks such kinds with the variables `Configure` reads | Anthropic, OpenAI |
-| `ServerVerifier` (`AllowPrivateServers`) | `Verify` contacts a server named in the scanned content rather than a fixed public API. Refuse servers that are not `https` and any private, loopback or link-local address unless told otherwise: a repository must not be able to point patty at the operator's network | Kubernetes |
-| `DryRunRevoker` (`DryRunRevoke`) | The revocation endpoint can rehearse, or the provider can list and match without touching anything, so the confirmation prompt shows what a revocation would do | Slack, Google Cloud, Anthropic, OpenAI, container registry |
+| `Configurable` (`Configure`) | The provider takes operator configuration from the environment: a privileged credential of the operator's own, an organization's admin key, on which `Kinds` may depend (`patty kinds` marks such kinds with the variables `Configure` reads), or the instances to verify against (`GRAFANA_URL`, `GITLAB_URL`, which the command adds `--grafana-url` and `--gitlab-url` to) | Anthropic, OpenAI, Grafana, GitLab |
+| `ServerVerifier` (`AllowPrivateServers`) | `Verify` contacts a server named in the scanned content rather than a fixed public API. Run every such server through `detect.ServerPolicy`, which refuses servers that are not `https` and any private, loopback or link-local address unless told otherwise: a repository must not be able to point patty at the operator's network. A server the operator named on the command line is not subject to it | Kubernetes, Grafana, GitLab, npm |
+| `InstanceObserver` (`Instances`, `Bind`) | The credential is accepted by one instance it does not name, a Grafana or a self-managed GitLab. `Instances` runs on every object and returns the origins it names; the scan collects them per repository and `Bind` records them on each of the provider's tokens before `Verify`, the ones from the token's own object first, in whatever field `Verify` reads them back from (`Token.Secret`, as companion material). Pair it with `ServerVerifier`: discovered instances go through the policy, and `detect.AcrossInstances` turns the per-instance answers into one verdict | Grafana, GitLab |
+| `DryRunRevoker` (`DryRunRevoke`) | The revocation endpoint can rehearse, or the provider can list and match without touching anything, so the confirmation prompt shows what a revocation would do | Slack, Google Cloud, Anthropic, OpenAI, container registry, npm, GitLab |
 
 ### Registering
 

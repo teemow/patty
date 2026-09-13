@@ -48,6 +48,17 @@ Detection, verification and revocation are organised per **provider**: each prov
 | GitHub | `github-user-to-server` | GitHub App user-to-server token | yes |
 | GitHub | `github-refresh` | GitHub App refresh token | yes |
 | GitHub | `github-server-to-server` | GitHub App installation token | no |
+| GitLab | `gitlab-pat` | personal access token (routable tokens carry a CRC32 checksum) | yes |
+| GitLab | `gitlab-deploy-token` | deploy token | no |
+| GitLab | `gitlab-runner-token` | runner authentication token | no |
+| GitLab | `gitlab-ci-job-token` | CI job token | no |
+| GitLab | `gitlab-pipeline-trigger-token` | pipeline trigger token | no |
+| GitLab | `gitlab-feed-token` | feed token | no |
+| GitLab | `gitlab-incoming-mail-token` | incoming mail token | no |
+| GitLab | `gitlab-agent-token` | agent for Kubernetes token | no |
+| GitLab | `gitlab-oauth-app-secret` | OAuth application secret | no |
+| GitLab | `gitlab-feature-flag-client-token` | feature flag client (Unleash instance) token | no |
+| GitLab | `gitlab-scim-token` | SCIM token | no |
 | Slack | `slack-bot-token` | bot token | yes |
 | Slack | `slack-user-token` | user token | yes |
 | Slack | `slack-app-token` | app-level token | no |
@@ -74,6 +85,13 @@ Detection, verification and revocation are organised per **provider**: each prov
 | OpenAI | `openai-service-account-key` | service account key (the T3BlbkFJ marker is not a checksum, but it removes random look-alikes) | with OPENAI_ADMIN_KEY |
 | OpenAI | `openai-admin-key` | admin key (the T3BlbkFJ marker is not a checksum, but it removes random look-alikes) | with OPENAI_ADMIN_KEY |
 | OpenAI | `openai-legacy-key` | legacy user key (the T3BlbkFJ marker is not a checksum, but it removes random look-alikes) | no |
+| Grafana | `grafana-service-account-token` | service account token | no |
+| Grafana | `grafana-cloud-access-policy-token` | Grafana Cloud access policy token | no |
+| Grafana | `grafana-legacy-api-key` | API key (legacy, pre-service-account) | no |
+| PagerDuty | `pagerduty-api-key` | REST API key (general access or user) | no |
+| PagerDuty | `pagerduty-routing-key` | routing key (Events API integration key) | no |
+| npm | `npm-access-token` | access token | yes |
+| npm | `npm-legacy-token` | legacy token (UUID, from an .npmrc _authToken) | yes |
 | Kubernetes | `kubernetes-client-certificate` | client certificate | no |
 | Kubernetes | `kubernetes-service-account-token` | service account token | no |
 | Kubernetes | `kubernetes-token` | bearer token | no |
@@ -106,6 +124,14 @@ The sections below say how each provider finds its credentials without contactin
 The classic families share one layout: a prefix that names the family, followed by 36 characters whose last six are a [CRC32 checksum](https://github.blog/engineering/platform-security/behind-githubs-new-authentication-token-formats/) of the first 30, Base62-encoded. `ghp_` is a personal access token, `gho_` an OAuth token, and `ghu_`, `ghs_` and `ghr_` are a GitHub App's user-to-server, installation and refresh tokens. patty recomputes the checksum: a string with the right prefix and length but a wrong checksum is not a token and is not reported. That removes the false positives a pure regex match has to live with -- a `ghp_` followed by 36 random alphanumerics in a test fixture, a hash, a minified bundle -- and is why the report needs no allow-list to stay readable.
 
 The fine-grained format (`github_pat_`, 22 characters, `_`, 59 characters) has no documented checksum. It is matched on its shape alone and best confirmed with `--verify`.
+
+### GitLab
+
+Every GitLab token starts with `gl` and a family prefix: `glpat-` for personal, project and group access tokens, `gldt-` deploy, `glrt-` runner, `glcbt-` CI job, `glptt-` pipeline trigger, `glft-` feed, `glimt-` incoming mail, `glagent-` agent for Kubernetes, `gloas-` OAuth application secret, `glffct-` feature flag client and `glsoat-` SCIM. Most families are a fixed number of characters of the URL-safe alphabet after the prefix (20 for most, 25 for mail, 50 for agent, 64 for application secrets), a trigger token is 40 hex characters, and a job token has a short partition id and an underscore before its 20. All of those are matched on shape alone.
+
+The routable format GitLab issues since 2025 for personal access and runner tokens is different: the prefix, a base64url payload, a dot, an optional two-character version, a two-character length and seven characters of checksum, the CRC32 of everything before it in base36. patty recomputes the checksum and the length and rejects a candidate where either does not hold, the way it does for classic GitHub tokens. The payload is sixteen random bytes followed by `key:value` lines that route the token to its home: the cell, organization, group, project or user id, in base36. patty decodes them and reports *cell 1, organization 2, group 10, user 35* without contacting anyone. A legacy 20-character token carries nothing of the sort.
+
+A deploy token is only usable together with its username (`gitlab+deploy-token-N`), so patty looks for one in the same object and says whether it found it. What no family says is which GitLab issued it, gitlab.com or a self-managed instance, so the provider also watches every scanned object for hosts with a `gitlab` label (`gitlab.example.com`) and `--verify` tries those, see [instances a token does not name](report.md#instances-a-token-does-not-name).
 
 ### Slack
 
@@ -155,6 +181,22 @@ The OAuth access and refresh tokens Claude Code stores after `claude auth login`
 
 Every OpenAI key embeds `T3BlbkFJ`, which is `OpenAI` in base64, at a fixed position. Project (`sk-proj-`), service account (`sk-svcacct-`) and admin (`sk-admin-`) keys have it between two runs of 74 or 58 characters; legacy user keys (a bare `sk-`) have it between two runs of 20 alphanumerics. patty searches for the marker and checks the shape around it; a marker in any other position, or with a run of any other length, is not a key. What a key belongs to is not in its shape; `--verify` answers that.
 
+### Grafana
+
+A service account token is `glsa_`, 32 alphanumerics, an underscore and eight hex characters: the CRC32 of `glsa_` and the 32 characters, written byte by byte from the least significant one, as Grafana's `satokengen` writes it. patty recomputes it, and a lookalike with a wrong checksum is not reported. A Grafana Cloud access policy token is `glc_` and the base64 of a JSON document that names the org (`o`), the token (`n`), its secret (`k`) and, under `m.r`, the region of the stack it was created for; patty decodes it and reports *org acme, token ci-metrics, region prod-eu-west-2*, and a `glc_` whose body is not such a document is not a token. An API key from before service accounts is base64 JSON too, starting with `eyJrIjoi`, naming the key (`k`), its name (`n`) and the org id (`id`); it is reported as *key deploy, org id 3*.
+
+A service account token or API key is accepted by exactly one Grafana, which the token does not name, so the provider watches every scanned object for hosts with a `grafana` label (`grafana.example.com`, `acme.grafana.net`) and `--verify` tries those and the instances named with `--grafana-url`, see [instances a token does not name](report.md#instances-a-token-does-not-name); grafana.com itself is the vendor's site, not an instance. A Cloud token is bound to grafana.com by construction.
+
+### PagerDuty
+
+A REST API key is twenty characters: `y_` and eighteen of `[A-Za-z0-9_-]` for a general access key, `u+` and eighteen of `[A-Za-z0-9_+/-]` for a user key. Neither has a checksum, and `y_` ends many an identifier, so a general access key is only reported when the same object mentions PagerDuty (`pagerduty`, `pd_`, `api.pagerduty.com` or `Token token=`); a `u+` key is distinctive enough on its own. Both have to stand on their own, with nothing of either alphabet right before or after them.
+
+A routing key, the integration key that Alertmanager or any other sender addresses a service with, is 32 hex characters and nothing else, indistinguishable from an MD5 sum. It is a finding only by position: the value written after `routing_key`, `service_key` or `integration_key`, in their longer forms too (`pagerduty_routing_key`, `PAGERDUTY_ROUTING_KEY`, `PD_ROUTING_KEY`), in YAML, JSON, an environment file or a Terraform `pagerduty_service_integration`, and inside the `pagerduty_configs` of an Alertmanager receiver, wherever the receivers list sits (an `alertmanager.yml`, a Helm values file, the decoded value of a Secret). The attribution names the key it was found under, and the receiver for Alertmanager. A bare run of 32 hex characters is never reported, and neither is a `routing_key_file`. gitleaks has no rule for either PagerDuty kind.
+
+### npm
+
+An access token is `npm_` and 36 alphanumerics standing on their own; it has no checksum. The UUID tokens npm issued before 2021 are only tokens as the `_authToken` of an `.npmrc` line (`//registry.npmjs.org/:_authToken=…`, or a bare `_authToken=`); a UUID anywhere else is anything. Such a line also names the registry the token is for, which patty keeps as the attribution (*in an .npmrc for npm.example.com*) and as the target of `--verify` when it is a private registry. An `_authToken` that is a GitHub token, as for npm.pkg.github.com, is GitHub's finding.
+
 ### Kubernetes
 
 A kubeconfig is a YAML document with `kind: Config`, a list of clusters, a list of users and the contexts that pair them. patty reads every user. A client certificate embedded as `client-certificate-data` with its `client-key-data` is decoded and parsed (`crypto/x509`), and is only a credential when the key belongs to the certificate. The finding is named by the certificate's SHA-256 fingerprint and attributed with its subject (`CN=`), the groups in its organization field (`system:masters` is the one that grants everything), its issuer, its expiry and the server of the cluster the user's context points at; an expired certificate says so. A `token` is a bearer token: a JWT whose claims name a Kubernetes service account is reported as a service account token, a JWT of some other issuer (an OIDC id token pasted in) names that issuer in the attribution, and anything else is an opaque bearer token. `username` and `password` are a basic auth login, named `host/username` with the password kept apart. Users that only name files or plugins (`client-certificate`, `client-key`, `tokenFile`, `exec`, `auth-provider`) carry no secret and yield nothing.
@@ -193,9 +235,9 @@ Docker Hub tokens have a prefix (`dckr_pat_` for personal, `dckr_oat_` for organ
 
 ### What the scan costs
 
-The scan itself is a handful of substring searches per object: `gh`, `github_pat_`, `xoxb-`, `xoxp-`, `xapp-1-`, `xoxe`, `https://hooks.slack.com/`, `AKIA`, `ASIA`, `ABIA`, `ACCA`, `A3T`, `service_account`, `authorized_user`, `ya29.`, `1//0`, `AIza`, `Q~`, `==`, `sig=`, `sk-ant-`, `T3BlbkFJ`, `AGE-SECRET-KEY-1`, the PGP armor header, the three sops markers, `auths`, `dockerconfigjson`, `Basic `, `dckr_pat_`, `dckr_oat_`, `eyJ`, `kind: Config` and `kind: Secret`, the PEM armor header and the SSH algorithm names `ssh-`, `ecdsa-sha2-` and `sk-`, plus one pass over the alphanumeric runs for Quay tokens. Each candidate gets an exact shape check and, where the format has one, a checksum check.
+The scan itself is a handful of substring searches per object: `gh`, `gl` (which covers every GitLab prefix and the Grafana ones), `github_pat_`, `xoxb-`, `xoxp-`, `xapp-1-`, `xoxe`, `https://hooks.slack.com/`, `AKIA`, `ASIA`, `ABIA`, `ACCA`, `A3T`, `service_account`, `authorized_user`, `ya29.`, `1//0`, `AIza`, `Q~`, `==`, `sig=`, `sk-ant-`, `T3BlbkFJ`, `eyJrIjoi`, `y_`, `u+`, `routing_key`, `service_key`, `integration_key` and their upper-case forms, `npm_`, `_authToken`, `AGE-SECRET-KEY-1`, the PGP armor header, the three sops markers, `auths`, `dockerconfigjson`, `Basic `, `dckr_pat_`, `dckr_oat_`, `eyJ`, `kind: Config` and `kind: Secret`, the PEM armor header and the SSH algorithm names `ssh-`, `ecdsa-sha2-` and `sk-`, plus one pass over the alphanumeric runs for Quay tokens, and `grafana.` and `gitlab.` for the instances a token may belong to. Each candidate gets an exact shape check and, where the format has one, a checksum check.
 
-Everything more expensive happens only where a candidate asks for it: only an object that holds an AWS key id is searched for its secret, only the JSON object around a Google `type` marker is parsed, only an object that holds an Azure secret or key is searched for its tenant, client or account, only sops material for recipients, only a Docker config is parsed as JSON, only a kubeconfig, a Secret manifest or an image policy as YAML, and only an armored block as a key or certificate. The detector runs at about 1 GB/s per core; `git` decompressing objects is the bottleneck, which is why the readers run in parallel.
+Everything more expensive happens only where a candidate asks for it: only an object that holds an AWS key id is searched for its secret, only the JSON object around a Google `type` marker is parsed, only an object that holds an Azure secret or key is searched for its tenant, client or account, only sops material for recipients, only a Docker config is parsed as JSON, only a kubeconfig, a Secret manifest, an image policy or an Alertmanager configuration with `pagerduty_configs` as YAML, only a `glc_`, `eyJrIjoi` or routable GitLab body is base64-decoded, and only an armored block is parsed as a key or certificate. The detector runs at about 1 GB/s per core; `git` decompressing objects is the bottleneck, which is why the readers run in parallel.
 
 ## Compared with gitleaks
 
@@ -205,7 +247,7 @@ Everything more expensive happens only where a candidate asks for it: only an ob
 |---|---|---|
 | History covered | commits reachable from refs (`git log -p --all`) | every object in the database, plus `refs/pull/*` and force-pushed or deleted commits fetched from GitHub |
 | Unit of work | each commit's diff; content that appears in many commits is scanned as often | each object once |
-| The credentials in the [detection table](#detection) | regex + entropy (no rule for Anthropic OAuth tokens, Docker configs, Docker Hub or Quay tokens, Azure storage keys or SAS tokens; a Secret manifest, a JWT and a service account key are matched by shape, not opened) | exact shape + checksum where the format has one, offline attribution, optional live check; for sops identities, the files they decrypt; Secret manifests are decoded and their values searched, JWTs classified by their claims |
+| The credentials in the [detection table](#detection) | regex + entropy (no rule for Anthropic OAuth tokens, PagerDuty keys, Docker configs, Docker Hub or Quay tokens, Azure storage keys or SAS tokens; a Secret manifest, a JWT, a service account key, a Grafana or routable GitLab token are matched by shape, not opened) | exact shape + checksum where the format has one (classic GitHub, Grafana service account and routable GitLab tokens), offline attribution (the org of a Grafana Cloud token, the group and user of a GitLab token), optional live check against the instance the repository names; for sops identities, the files they decrypt; Secret manifests are decoded and their values searched, JWTs classified by their claims |
 | Private keys | one regex for any armored private key block | the block is parsed and named by its public key; the report says which certificate, `authorized_keys`, `cosign.pub`, image policy or GitHub account trusts it, and `--verify` asks GitHub whether an SSH key still opens an account |
 | Where it points | commit and file of each occurrence | oldest introducing commit, all refs that still contain it, and how orphaned commits went unreachable |
 | Scope | one repository or directory | any number of repositories, whole owners, plain directories and files, with a disk budget |

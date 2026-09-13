@@ -39,6 +39,11 @@ type Provider struct {
 	allowPrivate bool
 }
 
+// policy is the rule for the servers a kubeconfig names.
+func (p *Provider) policy() detect.ServerPolicy {
+	return detect.ServerPolicy{LookupIP: p.LookupIP, AllowPrivate: p.allowPrivate}
+}
+
 const (
 	auditNote = "check the API server's audit log for requests by this identity since the commit date"
 	// noRevocation is the fact every certificate finding has to carry.

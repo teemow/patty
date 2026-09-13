@@ -44,6 +44,8 @@ For GitHub targets patty uses a token from `GITHUB_TOKEN`, `GH_TOKEN`, or the [g
 
 **Google Cloud:** the file `GOOGLE_APPLICATION_CREDENTIALS` names, `CLOUDSDK_AUTH_ACCESS_TOKEN`, and the credential files gcloud writes under `~/.config/gcloud` are read locally, so the report can say that a leaked service account key or refresh token is still configured on this machine; only fingerprints are compared, and gcloud's `credentials.db` is not opened. Revoking a Google OAuth token with `--revoke` signs out every tool that shares its grant, gcloud included.
 
+**Grafana and GitLab instances:** a Grafana service account token or API key, and every GitLab token, is accepted by one instance the token does not name. With `--verify`, patty tries the instances passed with `--grafana-url` and `--gitlab-url` (repeatable; or `GRAFANA_URL` and `GITLAB_URL`, comma-separated), gitlab.com for GitLab, and the Grafana and GitLab hosts the scanned content itself names, the latter over https only and never on a private network unless `--verify-private-servers` is given. Instances you name are contacted as given. See [instances a token does not name](docs/report.md#instances-a-token-does-not-name).
+
 The tokens patty finds never leave your machine unless you pass `--verify` or `--revoke`; see [what leaves your machine](docs/report.md#what-leaves-your-machine).
 
 ## Usage
@@ -62,6 +64,7 @@ A target is a local path, `owner/repo`, a github.com URL, or a bare `owner` (use
 `patty --help` lists every flag. The ones you will reach for:
 
 - `--verify` -- ask each credential's provider, or the API server a kubeconfig names, which credentials are still **active**; `--revoke` then revokes those, after asking (`--yes` skips the question). API servers on private networks are only contacted with [`--verify-private-servers`](docs/report.md#verifying-against-api-servers)
+- `--grafana-url`, `--gitlab-url` -- the instances to check Grafana and self-managed GitLab tokens against, besides the ones the scanned content [names itself](docs/report.md#instances-a-token-does-not-name)
 - `--ignore fp,fp` -- leave tokens you have already dealt with out of the report, by [fingerprint](docs/report.md#fingerprints) or by kind (`--ignore kubernetes-secret-manifest`)
 - `--keep` -- keep mirrors in the cache so a re-run only fetches what changed; `--max-disk` and `--min-free` cap what the cache may use
 - `--include-forks` -- include forks when expanding an owner

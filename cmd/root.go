@@ -16,6 +16,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/teemow/patty/internal/detect"
+	"github.com/teemow/patty/internal/detect/gitlab"
+	"github.com/teemow/patty/internal/detect/grafana"
 	"github.com/teemow/patty/internal/detect/providers"
 	"github.com/teemow/patty/internal/disk"
 	"github.com/teemow/patty/internal/github"
@@ -62,7 +64,26 @@ type flags struct {
 	includeArchived bool
 	files           bool
 	ignore          []string
+	grafanaURLs     []string
+	gitlabURLs      []string
 	verbose         bool
+}
+
+// env is the process environment as the providers see it: the operator's
+// --grafana-url and --gitlab-url are added to GRAFANA_URL and GITLAB_URL,
+// which is how those providers take their instances.
+func (f flags) env(name string) string {
+	var extra []string
+	switch name {
+	case grafana.URLEnv:
+		extra = f.grafanaURLs
+	case gitlab.URLEnv:
+		extra = f.gitlabURLs
+	}
+	if len(extra) == 0 {
+		return os.Getenv(name)
+	}
+	return strings.Join(append(extra, os.Getenv(name)), ",")
 }
 
 // defaults are the flag values patty starts from. The cache subcommand,
@@ -109,9 +130,14 @@ revoke a key by itself takes the organization's admin key from the
 environment (ANTHROPIC_ADMIN_KEY, OPENAI_ADMIN_KEY). Kubernetes
 credentials are checked against the API server their kubeconfig names,
 over https only and never on a private network unless
---verify-private-servers is given. An unencrypted SSH key is offered to
-github.com once, with no command, after GitHub's published host key
-fingerprints were checked.
+--verify-private-servers is given. A Grafana or GitLab token does not
+name the instance that issued it: it is checked against the instances
+named with --grafana-url or --gitlab-url (or GRAFANA_URL, GITLAB_URL),
+and against the Grafana and GitLab hosts the scanned content itself
+names, under the same restrictions. An unencrypted SSH key is offered
+to github.com once, with no command, after GitHub's published host key
+fingerprints were checked. A PagerDuty routing key is never verified:
+the only test would page the on-call.
 
 Every credential comes with advice: where its owner revokes it, whether it
 is still configured on this machine, and what its history needs.
@@ -122,12 +148,14 @@ a target failed or was skipped and nothing was found.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return run(cmd, args, opts, providers.Default())
+			return run(cmd, args, opts, providers.New(opts.env))
 		},
 	}
 	f := cmd.Flags()
 	f.BoolVar(&opts.verify, "verify", false, "Check each credential against its provider's API to tell active ones from revoked ones")
-	f.BoolVar(&opts.verifyPrivate, "verify-private-servers", false, "With --verify, also contact API servers on private, loopback or link-local addresses named in kubeconfigs")
+	f.BoolVar(&opts.verifyPrivate, "verify-private-servers", false, "With --verify, also contact API servers, Grafana and GitLab instances and npm registries on private, loopback or link-local addresses named in the scanned content")
+	f.StringArrayVar(&opts.grafanaURLs, "grafana-url", nil, "Grafana instance to check service account tokens and API keys against with --verify (repeatable; also GRAFANA_URL)")
+	f.StringArrayVar(&opts.gitlabURLs, "gitlab-url", nil, "Self-managed GitLab instance to check tokens against with --verify, besides gitlab.com (repeatable; also GITLAB_URL)")
 	f.BoolVar(&opts.revoke, "revoke", false, "Ask the provider to revoke every active credential found (implies --verify; asks for confirmation)")
 	f.BoolVarP(&opts.yes, "yes", "y", false, "Revoke without asking for confirmation")
 	f.BoolVar(&opts.jsonOut, "json", false, "Print results as JSON")

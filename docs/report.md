@@ -43,6 +43,10 @@ The kind names the provider and the family: `github-pat`, `slack-bot-token`, `ku
 
 A token's shape reveals nothing about its owner. With `--verify`, an active token shows the user and scopes, the application it was issued to when GitHub reports one (GitHub CLI, Copilot, Desktop, VS Code, or the raw OAuth client id), and its expiry date if it has one.
 
+### GitLab
+
+A routable personal access or runner token names its home, *cell 1, organization 2, group 10, user 35*, the ids in its payload; a legacy token says nothing. A deploy token says whether its username (`gitlab+deploy-token-N`) was found next to it. With `--verify`, a live personal access token shows the instance that accepted it, the token's name, user id, scopes and last use, and its expiry date; one every candidate instance rejects is *revoked*, each instance named; one an instance answers 200 for but lists as revoked or inactive is *revoked* too; one without the `api` scope is *accepted, but its scopes do not allow reading …* and live all the same. A live runner token shows the runner it belongs to, a live deploy token the login it was accepted as; a deploy token without its username is *unverifiable*. Job, trigger, feed, incoming mail, agent, application, feature flag and SCIM tokens are *unverifiable*, each with the reason: a job token dies with its job, a trigger token can only be tested by starting a pipeline, and the rest are only accepted by endpoints the token does not name. [Instances a token does not name](#instances-a-token-does-not-name) says which instances are asked.
+
 ### Slack
 
 A token names the workspace (team) and the user or bot it was issued to; a webhook URL names the workspace. With `--verify`, an active token shows the workspace, the user or bot, and the scopes.
@@ -76,6 +80,18 @@ Anthropic says nothing about a key that merely authenticates, so an active key s
 ### OpenAI
 
 OpenAI too says nothing about a key that merely authenticates, so an active key shows *accepted by the API*, with the organization and project the API names in its response headers. With `OPENAI_ADMIN_KEY` set (see the README's Setup), a key of that organization is named the way the Console lists it: *key deploy in project Beta, owned by service account ci*; a key that is not in the organization's list stays at *accepted by the API*. A 429 is reported as *unknown*: a key whose quota is exhausted answers exactly like a rate-limited one, and is still live.
+
+### Grafana
+
+A Cloud token names its org, token name and region, a legacy API key its name and org id; a service account token says nothing. With `--verify`, a live service account token or API key shows *accepted by grafana.example.com as sa-1-deploy, org 1*, with *Grafana admin* when it is one, or *accepted by …, but not allowed to read /api/user*; one every candidate instance rejects is *revoked*, each instance named; one with no candidate instance at all is *unverifiable* with the hint to pass `--grafana-url`. A live Cloud token shows the org, its own name, the access policy it belongs to and that policy's scopes, and its expiry date when it has one; one whose scopes do not include `accesspolicies:read` is live and says so; one grafana.com rejects is *revoked*.
+
+### PagerDuty
+
+A routing key names the configuration key it was found under (*under integration_key*) or its Alertmanager receiver (*routing_key of receiver pagerduty-critical in Alertmanager config*); an API key says nothing. With `--verify`, a live user key shows *user Jane Doe jane@example.com, role admin*, a live general access key *general access key (account-level)*; one PagerDuty rejects is *revoked*. A routing key is always *unverifiable*, *verifying would page the on-call; treat as live*, and is never sent anywhere.
+
+### npm
+
+A token found on an `.npmrc` line names the registry the line is for, *in an .npmrc for the default registry* or *for npm.example.com*; a bare token says nothing. With `--verify`, a live token shows *user alice on registry.npmjs.org* and, when the registry lists it, whether it is a *publish*, *automation* or *read-only* token, when it was created and the CIDR it is bound to; a granular token the registry does not list is live all the same. One the registry rejects is *revoked*. A token for a private registry is checked against that registry, subject to the same restrictions as [API servers](#verifying-against-api-servers).
 
 ### Kubernetes
 
@@ -140,6 +156,10 @@ One side effect is called out in the confirmation list, because it is easy to mi
 
 GitHub processes revocations asynchronously, so a token may still answer as *pending* in the follow-up check for a moment.
 
+### GitLab
+
+A personal access token revokes itself: `DELETE /api/v4/personal_access_tokens/self` with the token in `PRIVATE-TOKEN`, on the first candidate instance that accepts it; an instance that answers 401 is not the one that issued the token, and the next is tried. Before asking for confirmation patty reads the token with `GET …/self` on the same instances and shows the answer under it. Every other family is revoked by its owner, and the report says where: deploy tokens under the project's or group's *Settings → Repository → Deploy tokens*, runner tokens under *Settings → CI/CD → Runners*, trigger tokens under *Settings → CI/CD → Pipeline trigger tokens*, feed and incoming mail tokens under the user's *Access Tokens* page, agent tokens under the agent's *Access tokens*, application secrets under *Applications*, feature flag client tokens by regenerating the project's instance ID, SCIM tokens under the group's *SAML SSO* settings. GitLab is not a GitHub secret scanning partner: a token leaked into a GitHub repository is revoked by nobody but its owner.
+
 ### Slack
 
 Slack tokens are revoked with [`auth.revoke`](https://api.slack.com/methods/auth.revoke), authenticated with the token itself; Slack does not notify anyone. Before asking for confirmation patty calls the method in its test mode (`test=1`), which answers exactly as the real call would without revoking anything, and shows that answer under each token.
@@ -176,6 +196,18 @@ Admin keys are managed only in the Console. OAuth tokens belong to a Claude Code
 
 OpenAI's API cannot revoke a key by itself either. With `OPENAI_ADMIN_KEY` set to an [admin key](https://platform.openai.com/settings/organization/admin-keys) of the organization, `--revoke` finds a leaked admin key in the organization's admin key list (`GET /v1/organization/admin_api_keys`) and a leaked project or service account key in the key lists of every project, archived ones included (`GET /v1/organization/projects`, then `GET /v1/organization/projects/{id}/api_keys`), matching each against the redacted value OpenAI shows for every key (`sk-abc...def`), and deletes the one match (`DELETE` on the same path). As with Anthropic, the dry run before the confirmation lists and matches only; a key no entry matches is *not in this organization*; an ambiguous match deletes nothing. OpenAI may refuse to delete a service account's key on its own, in which case deleting the service account under the project's settings removes it. Deletion is final. Legacy user keys (`sk-` and twenty characters on either side of the marker) are not listed by the Admin API and are revoked under the owner's [API keys](https://platform.openai.com/api-keys).
 
+### Grafana
+
+Nothing here is revocable by the holder: deleting a service account token needs `serviceaccounts:write`, deleting a Cloud token `accesspolicies:delete`, which the leaked token itself rarely has, so `--revoke` never submits a Grafana finding. The report points at the instance's *Administration → Service accounts* (where migrated API keys live too since Grafana 9.1, *Administration → API keys* before that) and, for a Cloud token, at the org's access policies page on grafana.com, with the org taken from the attribution. Grafana Cloud is a GitHub secret scanning partner for `glc_` tokens and revokes ones found in public repositories on its own; nobody does that for service account tokens or API keys.
+
+### PagerDuty
+
+PagerDuty's API revokes neither kind. A general access key is deleted under *Integrations → Developer Tools → API Access Keys* of the account (the key does not name the account's subdomain; `--verify` names its users), a user key under *My Profile → User Settings → API Access*. A routing key is regenerated on the service it belongs to, under *Integrations*; until then anyone holding it can page the on-call indefinitely, and afterwards Alertmanager, or whatever else sends events with it, needs the new key.
+
+### npm
+
+A token revokes itself: `DELETE /-/npm/v1/tokens/token/<token>` with the token as bearer, the request `npm token revoke` makes; a registry that only takes the record's key gets a second `DELETE` with the key the token list shows for it. Before asking for confirmation patty runs the same `whoami` and token lookup `--verify` does and shows the answer under the token. For revoking by hand the report points at the account's tokens page (`https://www.npmjs.com/settings/<user>/tokens`, with the user `--verify` names) and, for a token found on an `.npmrc` line for a private registry, at that registry's settings. npm is a GitHub secret scanning partner and revokes tokens found in public repositories and published packages on its own.
+
 ### Kubernetes
 
 Kubernetes has no revocation API at all, so `--revoke` never submits a Kubernetes finding and each kind carries its procedure. A client certificate stays valid until it expires or the cluster's CA is rotated; Kubernetes has no certificate revocation, so until then the identity is live. A legacy service account token dies with its Secret (`kubectl delete secret <name> -n <namespace>`), a bound one with its ServiceAccount, after which the workloads using it need a restart. A basic auth user is removed from the API server's basic-auth file. A plaintext Secret manifest is deleted and recreated in every cluster it was applied to, with new material, then taken out of git in favour of sops or an external secrets operator.
@@ -197,6 +229,7 @@ After the scan, patty checks the machine it runs on for the credentials it found
 | Provider | Checked |
 |----------|---------|
 | GitHub | `~/.config/gh/hosts.yml`, `~/.config/hub`, Copilot's `hosts.json` and `apps.json`, `~/.config/git/credentials`, `~/.git-credentials`, `~/.netrc`, `~/.gitconfig`, `GITHUB_TOKEN`, `GH_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, and whatever `gh auth token` returns |
+| GitLab | glab's `~/.config/glab-cli/config.yml`, `~/.netrc` and `~/.git-credentials` (a GitLab token as the password of a GitLab host), `GITLAB_TOKEN`, `GITLAB_PRIVATE_TOKEN`, `CI_JOB_TOKEN` |
 | Slack | `~/.slack/credentials.json`, `SLACK_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_USER_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_WEBHOOK_URL` |
 | AWS | `~/.aws/credentials`, `~/.aws/config`, `~/.s3cfg`, rclone's `rclone.conf`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` |
 | Google Cloud | the file `GOOGLE_APPLICATION_CREDENTIALS` names, `CLOUDSDK_AUTH_ACCESS_TOKEN`, and the `application_default_credentials.json` and `legacy_credentials/*/adc.json` gcloud writes under `~/.config/gcloud`; gcloud's `credentials.db` is not opened |
@@ -204,6 +237,9 @@ After the scan, patty checks the machine it runs on for the credentials it found
 | sops | `~/.config/sops/age/keys.txt` (on macOS also `~/Library/Application Support/sops/age/keys.txt`), `SOPS_AGE_KEY`, and the file `SOPS_AGE_KEY_FILE` points at. PGP keys live in the GnuPG keyring, which is not a text file and is not read; `gpg --list-secret-keys` shows whether a reported fingerprint is on this machine |
 | Anthropic | `ANTHROPIC_API_KEY`, `ANTHROPIC_ADMIN_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, Claude Code's `~/.claude/.credentials.json` and `~/.claude.json`, opencode's `~/.config/opencode/auth.json` |
 | OpenAI | `OPENAI_API_KEY`, `OPENAI_ADMIN_KEY`, Codex's `~/.codex/auth.json` (which mostly holds a sign-in, not a key; only a key found there is compared), opencode's `auth.json` |
+| Grafana | `GRAFANA_API_KEY`, `GRAFANA_TOKEN`, `GRAFANA_SERVICE_ACCOUNT_TOKEN`, `GRAFANA_CLOUD_API_KEY`, `GRAFANA_CLOUD_ACCESS_POLICY_TOKEN`, and the MCP server configurations of Claude Code (`~/.claude.json`) and Claude Desktop (`~/.config/Claude/claude_desktop_config.json`), whose env blocks often hold a Grafana token |
+| PagerDuty | `PAGERDUTY_TOKEN`, `PAGERDUTY_API_KEY`, `PD_API_KEY`, `PAGERDUTY_USER_TOKEN`, `PAGERDUTY_ROUTING_KEY`, and the pd CLI's `~/.config/pd/config.yaml` |
+| npm | `~/.npmrc` and the project's `.npmrc` in the working directory, `NPM_TOKEN`, `NODE_AUTH_TOKEN`, `NPM_CONFIG__AUTH` |
 | Kubernetes | `~/.kube/config`, `~/.config/kube/config` and every file `KUBECONFIG` lists; only certificate and token fingerprints are compared |
 | Private keys | every file under `~/.ssh/` and `~/.sigstore/`, and `SSH_PRIVATE_KEY`, `COSIGN_KEY`, `COSIGN_PRIVATE_KEY`; a variable that holds a path or a KMS URI instead of a key matches nothing |
 | Container registries | `~/.docker/config.json`, podman's `~/.config/containers/auth.json` and the file `REGISTRY_AUTH_FILE` points at, helm's `~/.config/helm/registry/config.json` and `HELM_REGISTRY_CONFIG`, and `DOCKER_PASSWORD`, `REGISTRY_PASSWORD`, `QUAY_PASSWORD`, `ACR_PASSWORD`, `CR_PAT`. A login is compared by host and user, so a variable holding a bare password only matches when that password is a Docker Hub token; a config entry that names a `credsStore` or credential helper keeps its secret in the OS keychain, which is not read |
@@ -216,6 +252,10 @@ The *audit* line says where to look for what a credential was used for while it 
 - **Google Cloud** -- the Cloud Audit Logs, and for an API key the API's metrics under APIs & Services. Google disables a service account key it finds in a public repository only when the organization policy `iam.serviceAccountKeyExposureResponse` is set to `DISABLE_KEY`; the default is to wait for abuse.
 - **Azure** -- the Entra sign-in logs of the service principal, and the storage account's diagnostic logs. Azure is a secret scanning partner for client secrets and storage keys, but nothing says a leaked one was disabled.
 - **Anthropic and OpenAI** -- the usage page of their console, filtered by key. Both are GitHub secret scanning partners and disable keys found in public repositories on their own (OpenAI also emails the owner), so a key from public history is probably already dead; `--verify` confirms.
+- **GitLab** -- `--verify` shows when a personal access token was last used; the instance's audit events list what it did since the commit date. GitLab is not a GitHub secret scanning partner: nobody revokes a leaked GitLab token but its owner.
+- **Grafana** -- the service account's token list shows when each token was last used, and the instance's access log has the requests. Grafana Cloud is a secret scanning partner for `glc_` tokens and revokes them; nobody revokes service account tokens or API keys on their own.
+- **PagerDuty** -- the account's audit trail for API keys, the service's incidents since the commit date for a routing key. PagerDuty is not a secret scanning partner, and gitleaks has no rule for its keys.
+- **npm** -- the account's packages for versions published since the commit date (`npm view <pkg> time`). npm is a secret scanning partner and revokes tokens found in public repositories and published packages.
 - **Kubernetes** -- the API server's audit log, for requests by the identity since the commit date.
 - **SSH keys** -- the key's last-used date under the account's SSH keys and the account's security log, and on servers the sshd log.
 - **TLS keys** -- the CA's issuance records and certificate transparency logs (crt.sh), for certificates on the key that nobody requested.
@@ -226,6 +266,15 @@ The *audit* line says where to look for what a credential was used for while it 
 `--verify` sends a Kubernetes credential to one place only: the API server named in the kubeconfig it was found in, as one `GET /version` with the credential (a TLS client certificate, an `Authorization: Bearer` header, or HTTP Basic). The server's audit log will show that request, under the leaked identity, from the machine running patty. The kubeconfig's `certificate-authority-data` is used to trust the server, else `insecure-skip-tls-verify` if it says so, else the system roots. A credential without a server (a bare service account token, a Secret manifest) is not sent anywhere.
 
 A repository can name any server it likes, so patty refuses to contact servers that are not `https`, and servers on private, loopback or link-local addresses (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `127.0.0.0/8`, `169.254.0.0/16`, their IPv6 equivalents, and any hostname that resolves there), reporting them as *unknown* with the reason. `--verify-private-servers` lifts that restriction for the case where patty runs inside the network the kubeconfig belongs to, and is the operator's decision, never the repository's.
+
+## Instances a token does not name
+
+A Grafana service account token, a Grafana API key and every GitLab token are accepted by exactly one instance, and the token does not say which. `--verify` therefore tries candidates, in this order:
+
+1. The instances the operator named with `--grafana-url` or `--gitlab-url` (repeatable) or in `GRAFANA_URL` and `GITLAB_URL` (comma- or space-separated). They are contacted as given, plain http included: naming one is the operator's decision. For GitLab, gitlab.com is always among them.
+2. The hosts the scanned content itself names: a host with a `grafana` or `gitlab` label (`grafana.example.com`, `acme.grafana.net`, `gitlab.example.com`) anywhere in the scanned repository or directory, the decoded values of Secret manifests included, with the scheme and port it was written with. The hosts named in the same object as the token come first. The vendor's own sites (grafana.com, docs.gitlab.com) are not instances. Discovered hosts are subject to the same restrictions as [API servers](#verifying-against-api-servers): `https` only, and never on a private network unless `--verify-private-servers` is given.
+
+The first instance that accepts the credential settles it as *active*. It is *revoked* only when every candidate rejected it explicitly, each instance named in the detail; a mix of rejections and instances that could not be asked is *unknown*, since the instance that would have accepted it may be the one that could not be asked. A Grafana token with no candidate at all is *unverifiable* with the hint to pass `--grafana-url`. Instances are only discovered during a scan: `patty revoke` has none and relies on the flags and, for GitLab, gitlab.com. A private npm registry named on an `.npmrc` line is contacted under the same restrictions.
 
 ## Verifying SSH keys against GitHub
 
@@ -239,11 +288,15 @@ Every credential is shown with a **fingerprint** (`fp b492588d8d3ffbbb`): the fi
 
 ## What leaves your machine
 
-Without `--verify` or `--revoke`, nothing. The credentials patty finds are not sent anywhere unless you ask for that. With `--verify`, each found credential goes to its provider once, as listed below; `--revoke` and `patty revoke` add the revocation requests. Age identities, PGP keys, Anthropic refresh tokens, encrypted SSH keys, TLS keys and cosign keys are never sent anywhere, with or without `--verify`: there is no one to ask.
+Without `--verify` or `--revoke`, nothing. The credentials patty finds are not sent anywhere unless you ask for that. With `--verify`, each found credential goes to its provider once, as listed below; `--revoke` and `patty revoke` add the revocation requests. Age identities, PGP keys, Anthropic refresh tokens, PagerDuty routing keys, GitLab tokens other than personal access, runner and deploy tokens, encrypted SSH keys, TLS keys and cosign keys are never sent anywhere, with or without `--verify`: there is no one to ask, or asking would have consequences.
 
 ### GitHub
 
 `--verify` sends a token to `GET /user`, or `GET /installation/repositories` for an app installation token. `--revoke` and `patty revoke` send it to `POST /credentials/revoke`.
+
+### GitLab
+
+A personal access token makes one `GET /api/v4/personal_access_tokens/self` per candidate instance, with the token in `PRIVATE-TOKEN`, until one accepts it; a runner token one `POST /api/v4/runners/verify` per instance with the token as form data, the request every runner makes on start; a deploy token, together with its username, one `GET /jwt/auth?service=container_registry` per instance as HTTP Basic, which requests no scope and reads nothing. Job, trigger, feed, incoming mail, agent, application, feature flag and SCIM tokens are not sent anywhere. `--revoke` sends one `DELETE /api/v4/personal_access_tokens/self` per instance until one accepts it, after the same `GET`. [Instances a token does not name](#instances-a-token-does-not-name) says which instances those are.
 
 ### Slack
 
@@ -268,6 +321,18 @@ API keys and OAuth access tokens make one `GET /v1/models` (with the `anthropic-
 ### OpenAI
 
 Keys make one `GET /v1/models`; admin keys make one `GET /v1/organization/admin_api_keys`. When `OPENAI_ADMIN_KEY` is set, the organization's key lists are fetched once per run with that key, and the leaked keys are compared locally against the redacted values in them. `--revoke` then sends one deletion per matched key, with the admin key.
+
+### Grafana
+
+A service account token or API key makes one `GET /api/user` per candidate instance, with the token as bearer, until one accepts it; without a candidate it is not sent anywhere. A Cloud token makes one `GET https://grafana.com/api/v1/tokens?region=…` with the token as bearer and, when that lists the token, one `GET /api/v1/accesspolicies/<id>` to name its policy. `--revoke` sends nothing to Grafana.
+
+### PagerDuty
+
+An API key makes one `GET https://api.pagerduty.com/users/me` and, for a general access key, which has no user, one `GET /abilities`. A routing key is never sent anywhere, with or without `--verify`. `--revoke` sends nothing to PagerDuty.
+
+### npm
+
+A token makes one `GET /-/whoami` on its registry (registry.npmjs.org, or the private registry its `.npmrc` line named) with the token as bearer and, when accepted, one `GET /-/npm/v1/tokens` to find its own record. `--revoke` sends one `DELETE /-/npm/v1/tokens/token/<token>`, and a second one with the record's key when the registry does not take the value, after the same `whoami`.
 
 ### Kubernetes
 
