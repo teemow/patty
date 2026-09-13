@@ -49,8 +49,8 @@ access tokens. GitHub installation tokens, Slack app-level and
 configuration tokens and webhooks, temporary AWS keys, Anthropic admin keys
 and OAuth tokens, legacy OpenAI user keys, and every other registry
 credential cannot; the report says where to revoke those by hand. Age
-identities and PGP keys have no one to revoke them with; the report says
-how to rotate them.`,
+identities, PGP keys and Kubernetes credentials have no one to revoke them
+with; the report says how to rotate them.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.yes = yes

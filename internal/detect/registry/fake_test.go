@@ -114,9 +114,9 @@ func newFakeHub(t *testing.T) *fakeHub {
 	return f
 }
 
-// jwt mints a token whose payload names the account, unsigned: the
+// mintJWT mints a token whose payload names the account, unsigned: the
 // provider reads the claim, it does not verify the signature.
-func jwt(account string) string {
+func mintJWT(account string) string {
 	enc := func(v any) string {
 		raw, _ := json.Marshal(v)
 		return base64.RawURLEncoding.EncodeToString(raw)
@@ -133,13 +133,13 @@ func (f *fakeHub) serve(w http.ResponseWriter, r *http.Request) {
 		var login struct{ Username, Password string }
 		_ = json.NewDecoder(r.Body).Decode(&login)
 		if f.passwords[login.Username] == login.Password && login.Password != "" {
-			_ = json.NewEncoder(w).Encode(map[string]string{"token": jwt(login.Username)})
+			_ = json.NewEncoder(w).Encode(map[string]string{"token": mintJWT(login.Username)})
 			return
 		}
 		for i, t := range f.tokens[login.Username] {
 			if t.Active && t.Token == login.Password {
 				f.tokens[login.Username][i].LastUsed = time.Now().UTC().Format(time.RFC3339)
-				_ = json.NewEncoder(w).Encode(map[string]string{"token": jwt(login.Username)})
+				_ = json.NewEncoder(w).Encode(map[string]string{"token": mintJWT(login.Username)})
 				return
 			}
 		}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"sort"
+	"strings"
 )
 
 // Provider is one credential issuer: it knows the token formats it hands
@@ -58,6 +59,15 @@ type Configurable interface {
 	Configure(env func(string) string)
 }
 
+// ServerVerifier is a Provider that verifies credentials against servers
+// named in the scanned content itself, the API server of a kubeconfig,
+// rather than a fixed public API. Such a provider refuses servers on
+// private, loopback and link-local addresses unless told otherwise: a
+// repository must not be able to point patty at the operator's own network.
+type ServerVerifier interface {
+	AllowPrivateServers(allow bool)
+}
+
 // Configure hands every provider that takes operator configuration the
 // environment to read it from, and returns the providers for NewRegistry.
 func Configure(env func(string) string, providers ...Provider) []Provider {
@@ -106,6 +116,11 @@ type KindInfo struct {
 	// revealing it, such as a registry login's host and username whose
 	// secret is the password in Token.Secret; the report shows it in full.
 	PublicValue bool
+	// Opaque reports that a finding of this kind names secret material of
+	// no recognised shape, a plaintext Kubernetes Secret, which no provider
+	// can verify. The report lists such findings after every credential it
+	// can put a name to.
+	Opaque bool
 }
 
 // LocalSources names where a provider's credentials are configured on the
@@ -114,7 +129,8 @@ type LocalSources struct {
 	// Env lists environment variables tools read the credential from.
 	Env []string
 	// EnvFiles lists environment variables whose value is the path of a
-	// file holding the credential.
+	// file holding the credential, or a list of such paths separated the
+	// way PATH is.
 	EnvFiles []string
 	// ConfigFiles are relative to the XDG config directory (~/.config).
 	ConfigFiles []string
@@ -150,12 +166,11 @@ func (r *Registry) Providers() []Provider {
 }
 
 // Find returns every credential of every provider in content, sorted by
-// offset, with line numbers filled in.
+// offset, with line numbers filled in. The values of a Kubernetes Secret
+// manifest are decoded and searched too: a credential found inside one is
+// placed at the line of its key and attributed to the Secret.
 func (r *Registry) Find(content []byte) []Token {
-	var found []Token
-	for _, p := range r.providers {
-		found = append(found, p.Find(content)...)
-	}
+	found := r.rescan(r.find(content), content)
 	if len(found) == 0 {
 		return nil
 	}
@@ -164,6 +179,73 @@ func (r *Registry) Find(content []byte) []Token {
 		found[i].Line = bytes.Count(content[:found[i].Offset], []byte{'\n'}) + 1
 	}
 	return found
+}
+
+func (r *Registry) find(content []byte) []Token {
+	var found []Token
+	for _, p := range r.providers {
+		found = append(found, p.Find(content)...)
+	}
+	return found
+}
+
+// rescan searches the decoded values of every Secret manifest in content,
+// one base64 layer deep, and adds what it finds to found. A credential a
+// provider already found in the same value, in the clear under stringData
+// or decoded on its own, is not reported twice; it gets the Secret's
+// context instead. Values that are sops ciphertext, templates or empty are
+// left alone.
+func (r *Registry) rescan(found []Token, content []byte) []Token {
+	for _, s := range Secrets(content) {
+		if s.Sops {
+			continue
+		}
+		for _, v := range s.Plaintext() {
+			for _, tok := range r.find(v.Value) {
+				tok.Offset = v.Offset
+				tok.Attribution = InSecret(s.Ref(), v.Key, tok.Attribution)
+				found = attribute(found, tok, v.End)
+			}
+		}
+	}
+	return found
+}
+
+// InSecret prefixes a credential's attribution with the Secret manifest and
+// key it was found under.
+func InSecret(ref, key, attribution string) string {
+	where := "in Secret " + ref + ", key " + key
+	if attribution == "" {
+		return where
+	}
+	return where + " (" + attribution + ")"
+}
+
+// attribute adds a token found inside the Secret value spanning [tok.Offset,
+// end) to found, unless a provider already found the same credential in
+// that span, in which case that finding learns the Secret context.
+func attribute(found []Token, tok Token, end int) []Token {
+	for i := range found {
+		f := &found[i]
+		if f.Kind == tok.Kind && f.Value == tok.Value && f.Offset >= tok.Offset && f.Offset < end {
+			if !strings.HasPrefix(f.Attribution, "in Secret ") {
+				f.Attribution = tok.Attribution
+			}
+			return found
+		}
+	}
+	return append(found, tok)
+}
+
+// AllowPrivateServers tells every provider that verifies against servers
+// named in the scanned content whether private, loopback and link-local
+// addresses may be contacted.
+func (r *Registry) AllowPrivateServers(allow bool) {
+	for _, p := range r.providers {
+		if v, ok := p.(ServerVerifier); ok {
+			v.AllowPrivateServers(allow)
+		}
+	}
 }
 
 // Correlators returns the registered providers that relate their

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/teemow/patty/internal/detect"
+	"github.com/teemow/patty/internal/detect/jwt"
 )
 
 // hubLoginPath is Docker Hub's login endpoint, which accepts a password or
@@ -111,13 +112,13 @@ func (p *Provider) login(ctx context.Context, host, user, password string) detec
 // hub.docker.com, which answers a valid login with a JWT that names the
 // account. A token or password can be checked in no other way.
 func (p *Provider) hubLogin(ctx context.Context, user, password string) detect.Verification {
-	jwt, status, err := p.hubJWT(ctx, user, password)
+	token, status, err := p.hubJWT(ctx, user, password)
 	switch {
 	case err != nil:
 		return unknown(err.Error())
 	case status == http.StatusOK:
 		account := user
-		if name := jwtClaim(jwt, "username"); name != "" {
+		if name := jwtClaim(token, "username"); name != "" {
 			account = name
 		}
 		return detect.Verification{Status: detect.StatusActive, Detail: "Docker Hub account " + account}
@@ -215,22 +216,12 @@ func parseChallenge(h string) (string, map[string]string) {
 	return scheme, params
 }
 
-// jwtClaim reads one string claim from the payload of a JWT without
-// verifying it: the token was just issued to us over TLS, and the claim
-// only labels the report.
-func jwtClaim(jwt, claim string) string {
-	parts := strings.Split(jwt, ".")
-	if len(parts) != 3 {
+// jwtClaim reads one string claim from a JWT Docker Hub just issued to us
+// over TLS, without verifying it: the claim only labels the report.
+func jwtClaim(token, claim string) string {
+	c, ok := jwt.Decode(token)
+	if !ok {
 		return ""
 	}
-	payload, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(parts[1], "="))
-	if err != nil {
-		return ""
-	}
-	var claims map[string]any
-	if json.Unmarshal(payload, &claims) != nil {
-		return ""
-	}
-	s, _ := claims[claim].(string)
-	return s
+	return c.String(claim)
 }

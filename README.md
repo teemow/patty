@@ -7,7 +7,7 @@
 </p>
 <h1 align="center">patty</h1>
 <p align="center">
-  Finds leaked GitHub, Slack, AWS, Anthropic, OpenAI and container registry credentials, and the keys that decrypt sops secrets, in every corner of a repository's history.<br>
+  Finds leaked GitHub, Slack, AWS, Anthropic, OpenAI, container registry and Kubernetes credentials, and the keys that decrypt sops secrets, in every corner of a repository's history.<br>
   Marge's sister. Works at the DMV. Checks everyone's credentials.
 </p>
 
@@ -58,8 +58,8 @@ A target is a local path, `owner/repo`, a github.com URL, or a bare `owner` (use
 
 `patty --help` lists every flag. The ones you will reach for:
 
-- `--verify` -- ask GitHub, Slack, AWS, Anthropic, OpenAI and the registries which credentials are still **active**; `--revoke` then revokes those, after asking (`--yes` skips the question)
-- `--ignore fp,fp` -- leave tokens you have already dealt with out of the report, by [fingerprint](docs/report.md#fingerprints)
+- `--verify` -- ask GitHub, Slack, AWS, Anthropic, OpenAI, the registries and the API servers named in kubeconfigs which credentials are still **active**; `--revoke` then revokes those, after asking (`--yes` skips the question). API servers on private networks are only contacted with [`--verify-private-servers`](docs/report.md#verifying-against-api-servers)
+- `--ignore fp,fp` -- leave tokens you have already dealt with out of the report, by [fingerprint](docs/report.md#fingerprints) or by kind (`--ignore kubernetes-secret-manifest`)
 - `--keep` -- keep mirrors in the cache so a re-run only fetches what changed; `--max-disk` and `--min-free` cap what the cache may use
 - `--include-forks` -- include forks when expanding an owner
 
@@ -90,7 +90,7 @@ Each token is listed once with every place it was found, the oldest commit that 
 
 1. **Mirror, not clone.** `git clone --mirror` brings every ref GitHub advertises, including `refs/pull/*` and so the history of every pull request.
 2. **Fetch what was rewritten.** The repository activity feed names the commits that were force-pushed away or deleted; GitHub still serves them by SHA, so patty fetches them too.
-3. **Scan objects, not diffs.** Every blob, commit and tag in the object database is read exactly once, reachable or not, and checked for GitHub tokens, Slack tokens and webhooks, AWS access keys, Anthropic and OpenAI API keys, the registry logins in Docker configs and pull secrets (base64 layers included) and Docker Hub and Quay tokens, and the age identities and PGP keys that decrypt sops secrets. Classic GitHub tokens and age identities are confirmed against their built-in checksum, so a lookalike in a test fixture is not reported; an AWS key id names the account it belongs to without asking AWS, and a sops identity comes with the list of encrypted files in the scanned repositories it opens.
+3. **Scan objects, not diffs.** Every blob, commit and tag in the object database is read exactly once, reachable or not, and checked for GitHub tokens, Slack tokens and webhooks, AWS access keys, Anthropic and OpenAI API keys, the registry logins in Docker configs and pull secrets (base64 layers included) and Docker Hub and Quay tokens, the client certificates, tokens and logins of kubeconfigs and Kubernetes service account tokens, and the age identities and PGP keys that decrypt sops secrets. The values of every Kubernetes Secret manifest are decoded and searched for all of them, and a Secret committed in the clear is reported on its own. Classic GitHub tokens and age identities are confirmed against their built-in checksum, so a lookalike in a test fixture is not reported; an AWS key id names the account it belongs to without asking AWS, and a sops identity comes with the list of encrypted files in the scanned repositories it opens.
 4. **Attribute afterwards.** Only for objects that contain a token does patty look up the path, the introducing commit, and the refs that still contain it.
 
 Mirrors live in a size-capped cache and are removed after the scan unless `--keep` is set, so pointing patty at an organization never fills a drive. [How patty works](docs/how-it-works.md) has the details, the token families it detects, and a [comparison with gitleaks](docs/how-it-works.md#compared-with-gitleaks).

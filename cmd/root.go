@@ -44,6 +44,7 @@ func SetVersion(v string) {
 
 type flags struct {
 	verify          bool
+	verifyPrivate   bool
 	revoke          bool
 	yes             bool
 	jsonOut         bool
@@ -68,7 +69,7 @@ var opts flags
 
 var rootCmd = &cobra.Command{
 	Use:   "patty [target...]",
-	Short: "Finds leaked GitHub, Slack, AWS, Anthropic, OpenAI, registry and sops credentials in every corner of a repository's history",
+	Short: "Finds leaked GitHub, Slack, AWS, Anthropic, OpenAI, registry, Kubernetes and sops credentials in every corner of a repository's history",
 	Long: `Patty checks the credentials in your git history -- all of it.
 
 A target is a local repository path, an owner/repo, a github.com URL, or a
@@ -80,14 +81,21 @@ feed reports as force-pushed away or deleted, and every object in the
 database is scanned -- reachable or not. patty looks for GitHub tokens,
 Slack tokens and webhooks, AWS access keys, Anthropic and OpenAI API keys,
 the registry logins in Docker configs and pull secrets together with Docker
-Hub and Quay tokens, and the age identities and PGP keys that decrypt sops
-secrets; for those it
-also lists the sops files in the scanned repositories that are encrypted to
-them. Classic GitHub tokens and age identities are verified offline against
-their built-in checksum; --verify asks each provider whether a credential
-is still live, and --revoke asks it to revoke the live ones. Anthropic and
-OpenAI keys are revoked through the organization's admin key, read from
-ANTHROPIC_ADMIN_KEY and OPENAI_ADMIN_KEY.
+Hub and Quay tokens, the client certificates, tokens and logins of
+kubeconfigs, Kubernetes service account tokens, and the age identities and
+PGP keys that decrypt sops secrets; for those it also lists the sops files
+in the scanned repositories that are encrypted to them. The values of
+every Kubernetes Secret manifest are decoded and searched for all of the
+above, and a Secret committed with plaintext values is reported on its own
+(kind kubernetes-secret-manifest; --ignore takes kinds as well as
+fingerprints). Classic GitHub tokens and age identities are verified
+offline against their built-in checksum; --verify asks each provider
+whether a credential is still live, and --revoke asks it to revoke the
+live ones. Anthropic and OpenAI keys are revoked through the
+organization's admin key, read from ANTHROPIC_ADMIN_KEY and
+OPENAI_ADMIN_KEY. Kubernetes credentials are checked against the API
+server their kubeconfig names, over https only and never on a private
+network unless --verify-private-servers is given.
 
 Every credential comes with advice: where its owner revokes it, whether it
 is still configured on this machine, and what its history needs.
@@ -103,6 +111,7 @@ a target failed or was skipped and nothing was found.`,
 func init() {
 	f := rootCmd.Flags()
 	f.BoolVar(&opts.verify, "verify", false, "Check each credential against its provider's API to tell active ones from revoked ones")
+	f.BoolVar(&opts.verifyPrivate, "verify-private-servers", false, "With --verify, also contact API servers on private, loopback or link-local addresses named in kubeconfigs")
 	f.BoolVar(&opts.revoke, "revoke", false, "Ask the provider to revoke every active credential found (implies --verify; asks for confirmation)")
 	f.BoolVarP(&opts.yes, "yes", "y", false, "Revoke without asking for confirmation")
 	f.BoolVar(&opts.jsonOut, "json", false, "Print results as JSON")
@@ -119,7 +128,7 @@ func init() {
 	f.IntVar(&opts.activityPages, "activity-pages", 10, "Activity feed pages (100 events each) to read per repository and event type")
 	f.BoolVar(&opts.includeForks, "include-forks", false, "Include forks when expanding an owner")
 	f.BoolVar(&opts.includeArchived, "include-archived", true, "Include archived repositories when expanding an owner")
-	f.StringSliceVar(&opts.ignore, "ignore", nil, "Credential fingerprints to leave out of the report (comma-separated)")
+	f.StringSliceVar(&opts.ignore, "ignore", nil, "Credential fingerprints or kinds to leave out of the report (comma-separated)")
 	f.BoolVarP(&opts.verbose, "verbose", "v", false, "Print progress for each phase")
 }
 
@@ -159,6 +168,7 @@ func run(cmd *cobra.Command, args []string) error {
 	if opts.revoke {
 		opts.verify = true
 	}
+	registry.AllowPrivateServers(opts.verifyPrivate)
 
 	cache, err := newCache()
 	if err != nil {
