@@ -49,6 +49,26 @@ type Correlator interface {
 	Identifiers(tok Token) []string
 }
 
+// Configurable is a Provider that takes operator configuration from the
+// environment: a privileged credential of the operator's own, such as an
+// organization's admin key, that lets the provider revoke credentials its
+// API would otherwise only accept as callers. Configure runs once, before
+// the provider joins a Registry, so Kinds may depend on what is configured.
+type Configurable interface {
+	Configure(env func(string) string)
+}
+
+// Configure hands every provider that takes operator configuration the
+// environment to read it from, and returns the providers for NewRegistry.
+func Configure(env func(string) string, providers ...Provider) []Provider {
+	for _, p := range providers {
+		if c, ok := p.(Configurable); ok {
+			c.Configure(env)
+		}
+	}
+	return providers
+}
+
 // DryRunRevoker is a Provider whose revocation endpoint can rehearse a
 // revocation: it answers as it would for the real request without revoking
 // anything. patty uses it to preview a revocation before asking for

@@ -27,7 +27,10 @@ meant for whoever finds a leaked token -- and GitHub notifies the owner.
 Slack tokens go to auth.revoke, authenticated with the token itself. An AWS
 access key is deactivated through iam:UpdateAccessKey on its own user,
 signed with the key itself, which only works when the input holds the key
-id and its secret and the user may manage its own keys.
+id and its secret and the user may manage its own keys. Anthropic and
+OpenAI keys are found in the organization's key list and deactivated or
+deleted through its Admin API, which needs an admin key of that
+organization in ANTHROPIC_ADMIN_KEY or OPENAI_ADMIN_KEY.
 
 Tokens are read from the arguments, or from standard input when there are
 none, so a value never has to touch the shell history:
@@ -37,11 +40,13 @@ none, so a value never has to touch the shell history:
 
 Anything that is not a well-formed token is ignored. GitHub personal access
 tokens (classic and fine-grained), OAuth tokens, user-to-server and refresh
-tokens can be revoked, as can Slack bot, user and refresh tokens and AWS
-access key pairs. GitHub installation tokens, Slack app-level and
-configuration tokens and webhooks, and temporary AWS keys cannot; the
-report says where to revoke those by hand. Age identities and PGP keys have
-no one to revoke them with; the report says how to rotate them.`,
+tokens can be revoked, as can Slack bot, user and refresh tokens, AWS
+access key pairs, Anthropic API keys and OpenAI project, service account
+and admin keys (with an admin key configured). GitHub installation tokens,
+Slack app-level and configuration tokens and webhooks, temporary AWS keys,
+Anthropic admin keys and OAuth tokens, and legacy OpenAI user keys cannot;
+the report says where to revoke those by hand. Age identities and PGP keys
+have no one to revoke them with; the report says how to rotate them.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.yes = yes
