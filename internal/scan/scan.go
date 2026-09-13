@@ -1,5 +1,6 @@
-// Package scan runs the detector over every object of a repository and
-// attributes what it finds to commits, paths and refs.
+// Package scan runs the detector over every object of a repository, or
+// every file of a directory tree, and attributes what it finds to commits,
+// paths and refs.
 package scan
 
 import (
@@ -169,9 +170,13 @@ type Result struct {
 	Findings []Finding `json:"findings"`
 	Stats    Stats     `json:"stats"`
 	Notes    []string  `json:"notes,omitempty"`
-	Err      error     `json:"-"`
-	Error    string    `json:"error,omitempty"`
-	Skipped  bool      `json:"skipped,omitempty"`
+	// Files is true when the target is a file tree with no repository
+	// behind it, a plain directory or a single file; its findings have no
+	// history.
+	Files   bool   `json:"files,omitempty"`
+	Err     error  `json:"-"`
+	Error   string `json:"error,omitempty"`
+	Skipped bool   `json:"skipped,omitempty"`
 }
 
 type hit struct {
@@ -211,13 +216,9 @@ func Repo(ctx context.Context, name string, repo *gitrepo.Repo, remote Remote, o
 	}
 
 	var (
-		mu        sync.Mutex
-		bytes     int64
-		findings  = map[string]*Finding{}
-		hits      = map[string]map[hit]bool{} // token value -> distinct locations
-		registry  = opts.providers()
-		sightings = map[string][]detect.Sighting{} // blob -> identifiers it names, per correlators
-		logins    = map[string]bool{}              // GitHub logins read from noreply author addresses
+		c      = newCollector[hit](opts)
+		mu     sync.Mutex
+		logins = map[string]bool{} // GitHub logins read from noreply author addresses
 	)
 	err = parallel(ctx, shas, opts.workers(), func(shard []string) error {
 		var local int64
@@ -225,11 +226,7 @@ func Repo(ctx context.Context, name string, repo *gitrepo.Repo, remote Remote, o
 			local += obj.Size
 			switch obj.Type {
 			case "blob":
-				if seen := registry.Observe(content); len(seen) > 0 {
-					mu.Lock()
-					sightings[obj.SHA] = append(sightings[obj.SHA], seen...)
-					mu.Unlock()
-				}
+				c.observe(obj.SHA, content)
 			case "commit":
 				if found := noreplyLogins(content); len(found) > 0 {
 					mu.Lock()
@@ -239,56 +236,26 @@ func Repo(ctx context.Context, name string, repo *gitrepo.Repo, remote Remote, o
 					mu.Unlock()
 				}
 			}
-			for _, tok := range registry.Find(content) {
-				if opts.Ignore[tok.Fingerprint()] || opts.Ignore[string(tok.Kind)] {
-					continue
-				}
-				mu.Lock()
-				f := findings[tok.Value]
-				if f == nil {
-					f = NewFinding(registry, tok)
-					findings[tok.Value] = f
-					hits[tok.Value] = map[hit]bool{}
-				} else {
-					f.complete(tok.Secret, tok.Attribution)
-				}
-				f.Occurrences++
-				hits[tok.Value][hit{obj, tok.Line}] = true
-				mu.Unlock()
-			}
+			c.find(content, func(line int) hit { return hit{obj, line} })
 			return nil
 		})
-		mu.Lock()
-		bytes += local
-		mu.Unlock()
+		c.read(local)
 		return err
 	})
 	if err != nil {
 		return res, err
 	}
 	res.Stats.Scanned = len(shas)
-	res.Stats.Bytes = bytes
+	res.Stats.Bytes = c.bytes
 
-	if len(findings) > 0 {
-		paths, err := attribute(ctx, name, repo, commits, remote.Rewrites, findings, hits, &res.Stats)
+	if len(c.findings) > 0 {
+		paths, err := attribute(ctx, name, repo, commits, remote.Rewrites, c.findings, c.hits, &res.Stats)
 		if err != nil {
 			return res, err
 		}
-		correlate(ctx, name, registry, findings, sightings, paths, committers(logins, remote.Contributors))
-		for value, f := range findings {
-			if opts.Ignore[string(f.Kind)] {
-				delete(findings, value)
-			}
-		}
+		correlate(ctx, name, c.registry, c.findings, c.sightings, paths, committers(logins, remote.Contributors))
 	}
-	for _, f := range findings {
-		if opts.Verify {
-			v := registry.Verify(ctx, f.Detected())
-			f.Verification = &v
-		}
-		res.Findings = append(res.Findings, *f)
-	}
-	SortFindings(res.Findings)
+	res.Findings = c.results(ctx, opts)
 	res.Stats.Duration = time.Since(start)
 	return res, nil
 }
@@ -775,7 +742,10 @@ func parallel(ctx context.Context, items []string, workers int, fn func([]string
 
 // Summary aggregates results for the final line of a report.
 type Summary struct {
+	// Repos counts every target, repository or not; Files the ones scanned
+	// as files on disk only.
 	Repos    int
+	Files    int
 	Failed   int
 	Skipped  int
 	Tokens   int
@@ -791,6 +761,9 @@ func Summarize(results []Result) Summary {
 	seen := map[string]bool{}
 	for _, r := range results {
 		s.Repos++
+		if r.Files {
+			s.Files++
+		}
 		switch {
 		case r.Skipped:
 			s.Skipped++
@@ -822,9 +795,13 @@ func Describe(r Result) string {
 		return "failed: " + r.Err.Error()
 	}
 	st := r.Stats
-	s := fmt.Sprintf("%d objects · %s · %s", st.Scanned, disk.FormatSize(st.Bytes), st.Duration.Round(time.Millisecond))
+	one, many := "object", "objects"
+	if r.Files {
+		one, many = "file", "files"
+	}
+	s := fmt.Sprintf("%d %s · %s · %s", st.Scanned, plural(st.Scanned, one, many), disk.FormatSize(st.Bytes), st.Duration.Round(time.Millisecond))
 	if st.Refs > 0 {
-		s += fmt.Sprintf(" · %d refs", st.Refs)
+		s += fmt.Sprintf(" · %d %s", st.Refs, plural(st.Refs, "ref", "refs"))
 	}
 	if st.Orphaned > 0 {
 		s += fmt.Sprintf(" · %d orphaned commits", st.Orphaned)
@@ -833,7 +810,15 @@ func Describe(r Result) string {
 		s += fmt.Sprintf(" · %d rewritten commits fetched", st.Rewrites)
 	}
 	if st.Skipped > 0 {
-		s += fmt.Sprintf(" · %d large objects skipped", st.Skipped)
+		s += fmt.Sprintf(" · %d large %s skipped", st.Skipped, plural(st.Skipped, one, many))
 	}
 	return s
+}
+
+// plural picks the singular or plural form for n.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }

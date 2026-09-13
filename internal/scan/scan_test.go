@@ -254,7 +254,7 @@ func TestRunLocalTargetAndSummary(t *testing.T) {
 	if d := Describe(results[1]); !strings.HasPrefix(d, "failed: ") {
 		t.Fatalf("Describe failed = %q", d)
 	}
-	if d := Describe(results[0]); !strings.Contains(d, "objects") || !strings.Contains(d, "1 refs") || !strings.Contains(d, "1 orphaned") {
+	if d := Describe(results[0]); !strings.Contains(d, "objects") || !strings.Contains(d, "1 ref") || !strings.Contains(d, "1 orphaned") {
 		t.Fatalf("Describe ok = %q", d)
 	}
 }

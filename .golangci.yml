@@ -27,4 +27,4 @@ linters:
       # They may not grow; take one off this list when you shrink it.
       - linters:
           - gocognit
-        text: 'of func `(Repo|correlate|runOne|Text|\(\*Client\)\.Rewrites|kubeconfigUsers)` is high'
+        text: 'of func `(correlate|runOne|Text|\(\*Client\)\.Rewrites|kubeconfigUsers)` is high'
