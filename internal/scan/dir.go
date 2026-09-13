@@ -74,6 +74,7 @@ func Dir(ctx context.Context, name, root string, opts Options) (Result, error) {
 			sortLocations(f.Locations)
 		}
 		correlate(ctx, name, c.registry, c.findings, c.sightings, filePaths, nil)
+		c.bind(func(h fileHit) string { return h.path })
 	}
 	res.Findings = c.results(ctx, opts)
 	res.Stats.Duration = time.Since(start)

@@ -118,6 +118,32 @@ type PathClassifier interface {
 	Classify(tok Token, paths []string, matched []string) Kind
 }
 
+// InstanceObserver is a Provider whose credentials are accepted by one
+// instance the credential itself does not name: a Grafana service account
+// token works on exactly one Grafana, a GitLab token on one GitLab. Verify
+// has to know where to ask, so the scan shows the provider every object,
+// collects the instances the scanned repository names, and binds them to
+// each of the provider's findings before Verify, the ones named in the
+// same object first. What Verify does with a discovered instance is
+// subject to the ServerPolicy of a ServerVerifier.
+type InstanceObserver interface {
+	// Instances returns the origins (`https://host[:port]`) of the
+	// instances content names for this provider, or nil. It runs on every
+	// scanned object and has to be cheap; it must not keep a reference to
+	// content.
+	Instances(content []byte) []string
+	// Bind returns the token with instances recorded on it, in whatever
+	// form Verify reads them back.
+	Bind(tok Token, instances []string) Token
+}
+
+// InstanceSighting is one instance an InstanceObserver saw in scanned
+// content, and who saw it.
+type InstanceSighting struct {
+	Observer InstanceObserver
+	Origin   string
+}
+
 // Configurable is a Provider that takes operator configuration from the
 // environment: a privileged credential of the operator's own, such as an
 // organization's admin key, that lets the provider revoke credentials its
@@ -341,6 +367,41 @@ func (r *Registry) Observe(content []byte) []Sighting {
 	observe := func(b []byte) {
 		for _, c := range correlators {
 			seen = append(seen, c.Observe(b)...)
+		}
+	}
+	observe(content)
+	for _, s := range Secrets(content) {
+		if s.Sops {
+			continue
+		}
+		for _, v := range s.Plaintext() {
+			observe(v.Value)
+		}
+	}
+	return seen
+}
+
+// Instances shows content to every provider whose credentials are bound
+// to an instance the credential does not name, and returns the instances
+// they saw. The decoded values of the Kubernetes Secret manifests in
+// content are shown too, so an instance URL committed as a Secret value
+// counts like one committed in the clear.
+func (r *Registry) Instances(content []byte) []InstanceSighting {
+	var observers []InstanceObserver
+	for _, p := range r.providers {
+		if o, ok := p.(InstanceObserver); ok {
+			observers = append(observers, o)
+		}
+	}
+	if len(observers) == 0 {
+		return nil
+	}
+	var seen []InstanceSighting
+	observe := func(b []byte) {
+		for _, o := range observers {
+			for _, origin := range o.Instances(b) {
+				seen = append(seen, InstanceSighting{Observer: o, Origin: origin})
+			}
 		}
 	}
 	observe(content)

@@ -2,6 +2,7 @@ package scan
 
 import (
 	"context"
+	"sort"
 	"sync"
 
 	"github.com/teemow/patty/internal/detect"
@@ -17,8 +18,9 @@ type collector[H comparable] struct {
 	registry  *detect.Registry
 	ignore    map[string]bool
 	findings  map[string]*Finding
-	hits      map[string]map[H]bool        // token value -> distinct locations
-	sightings map[string][]detect.Sighting // content key -> identifiers it names, per correlators
+	hits      map[string]map[H]bool                // token value -> distinct locations
+	sightings map[string][]detect.Sighting         // content key -> identifiers it names, per correlators
+	instances map[string][]detect.InstanceSighting // content key -> instances it names, per instance observers
 	bytes     int64
 }
 
@@ -29,16 +31,65 @@ func newCollector[H comparable](opts Options) *collector[H] {
 		findings:  map[string]*Finding{},
 		hits:      map[string]map[H]bool{},
 		sightings: map[string][]detect.Sighting{},
+		instances: map[string][]detect.InstanceSighting{},
 	}
 }
 
-// observe shows content to the correlating providers and remembers what
-// they saw under key.
+// observe shows content to the correlating and instance-observing
+// providers and remembers what they saw under key.
 func (c *collector[H]) observe(key string, content []byte) {
-	if seen := c.registry.Observe(content); len(seen) > 0 {
-		c.mu.Lock()
+	seen, instances := c.registry.Observe(content), c.registry.Instances(content)
+	if len(seen) == 0 && len(instances) == 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(seen) > 0 {
 		c.sightings[key] = append(c.sightings[key], seen...)
-		c.mu.Unlock()
+	}
+	if len(instances) > 0 {
+		c.instances[key] = append(c.instances[key], instances...)
+	}
+}
+
+// bind hands every finding of an instance-observing provider the instances
+// that provider saw in the scanned content: the ones named in the objects
+// the credential itself was found in first, then the rest of the
+// repository. keyOf names the content a hit was in.
+func (c *collector[H]) bind(keyOf func(H) string) {
+	if len(c.instances) == 0 {
+		return
+	}
+	for value, f := range c.findings {
+		observer, ok := c.registry.Provider(f.Kind).(detect.InstanceObserver)
+		if !ok {
+			continue
+		}
+		near := map[string]bool{}
+		for h := range c.hits[value] {
+			near[keyOf(h)] = true
+		}
+		var first, rest []string
+		for key, seen := range c.instances {
+			for _, s := range seen {
+				if s.Observer != observer {
+					continue
+				}
+				if near[key] {
+					first = appendUnique(first, s.Origin)
+				} else {
+					rest = appendUnique(rest, s.Origin)
+				}
+			}
+		}
+		sort.Strings(first)
+		sort.Strings(rest)
+		instances := appendUnique(first, rest...)
+		if len(instances) == 0 {
+			continue
+		}
+		bound := observer.Bind(f.Detected(), instances)
+		f.Secret, f.Attribution = bound.Secret, bound.Attribution
 	}
 }
 

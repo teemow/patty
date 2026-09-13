@@ -254,6 +254,7 @@ func Repo(ctx context.Context, name string, repo *gitrepo.Repo, remote Remote, o
 			return res, err
 		}
 		correlate(ctx, name, c.registry, c.findings, c.sightings, paths, committers(logins, remote.Contributors))
+		c.bind(func(h hit) string { return h.object.SHA })
 	}
 	res.Findings = c.results(ctx, opts)
 	res.Stats.Duration = time.Since(start)
@@ -283,7 +284,7 @@ func NewFinding(registry *detect.Registry, tok detect.Token) *Finding {
 
 // Detected rebuilds the detect.Token a finding stands for.
 func (f Finding) Detected() detect.Token {
-	return detect.Token{Kind: f.Kind, Value: f.Token, Secret: f.Secret}
+	return detect.Token{Kind: f.Kind, Value: f.Token, Secret: f.Secret, Attribution: f.Attribution}
 }
 
 // complete takes over the companion secret and attribution of another

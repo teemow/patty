@@ -7,9 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -20,10 +18,6 @@ import (
 // versionPath is the one endpoint --verify reads: it needs no permission
 // beyond authentication and names the cluster's version.
 const versionPath = "/version"
-
-// privateFlag is the flag that lets verification reach private networks;
-// named here because the report has to say so.
-const privateFlag = "--verify-private-servers"
 
 // Verify implements detect.Provider with one GET /version against the
 // server the kubeconfig names, with the credential. A credential that
@@ -60,7 +54,7 @@ func (p *Provider) Verify(ctx context.Context, tok detect.Token) detect.Verifica
 	if cred.Server == "" {
 		return detect.Verification{Status: detect.StatusUnverifiable, Detail: "no server named next to it: only a kubeconfig says which API server to ask"}
 	}
-	if v, ok := p.admissible(ctx, cred.Server); !ok {
+	if v, ok := p.policy().Admit(ctx, cred.Server); !ok {
 		return v
 	}
 	client, err := p.client(cred, cert)
@@ -110,40 +104,6 @@ func (p *Provider) Verify(ctx context.Context, tok detect.Token) detect.Verifica
 		return detect.Verification{Status: detect.StatusActive, Detail: "accepted by " + host + ", but not allowed to read " + versionPath + ": " + msg}
 	}
 	return unknown(fmt.Sprintf("HTTP %d from %s", resp.StatusCode, host))
-}
-
-// admissible decides whether a server named in a repository may be
-// contacted: over https only, and not on a private, loopback or link-local
-// address unless the operator allowed that. A host that does not resolve
-// is not reachable from here, which is not a verdict on the credential.
-func (p *Provider) admissible(ctx context.Context, server string) (detect.Verification, bool) {
-	u, err := url.Parse(server)
-	if err != nil || u.Host == "" {
-		return unknown("server URL " + server + " does not parse"), false
-	}
-	if u.Scheme != "https" {
-		return unknown("server " + server + " is not https, not checked"), false
-	}
-	if p.allowPrivate {
-		return detect.Verification{}, true
-	}
-	host := u.Hostname()
-	ips := []net.IP{net.ParseIP(host)}
-	if ips[0] == nil {
-		if ips, err = p.LookupIP(ctx, host); err != nil {
-			return unknown("server not reachable from here: " + err.Error()), false
-		}
-	}
-	for _, ip := range ips {
-		if isPrivate(ip) {
-			return unknown("server " + host + " is on a private network, not checked; pass " + privateFlag + " to check it"), false
-		}
-	}
-	return detect.Verification{}, true
-}
-
-func isPrivate(ip net.IP) bool {
-	return ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
 }
 
 // client builds the one-shot HTTP client for a credential: the cluster's
@@ -215,6 +175,4 @@ func statusMessage(body []byte) string {
 	return msg
 }
 
-func unknown(detail string) detect.Verification {
-	return detect.Verification{Status: detect.StatusUnknown, Detail: detail}
-}
+func unknown(detail string) detect.Verification { return detect.Unknown(detail) }

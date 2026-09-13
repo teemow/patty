@@ -7,7 +7,10 @@ import (
 
 	"github.com/teemow/patty/internal/detect/anthropic"
 	"github.com/teemow/patty/internal/detect/github"
+	"github.com/teemow/patty/internal/detect/gitlab"
+	"github.com/teemow/patty/internal/detect/grafana"
 	"github.com/teemow/patty/internal/detect/kubernetes"
+	"github.com/teemow/patty/internal/detect/npm"
 	"github.com/teemow/patty/internal/detect/openai"
 	"github.com/teemow/patty/internal/detect/providers"
 )
@@ -45,6 +48,10 @@ func TestWriteKinds(t *testing.T) {
 		{string(openai.KindProject), "with " + openai.AdminKeyEnv},
 		{string(openai.KindLegacy), "no"},
 		{string(kubernetes.KindClientCertificate), "no"}, // no Revoker, whatever KindInfo says
+		{string(gitlab.KindPAT), "yes"},
+		{string(gitlab.KindDeployToken), "no"},
+		{string(grafana.KindServiceAccountToken), "no"}, // Configurable, but the configuration is not what makes anything revocable
+		{string(npm.KindAccessToken), "yes"},
 	} {
 		if !hasRowSuffix(rows, "`"+tc.kind+"`", "| "+tc.revocable+" |") {
 			t.Errorf("%s should be revocable %q:\n%s", tc.kind, tc.revocable, out.String())

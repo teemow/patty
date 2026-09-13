@@ -10,9 +10,13 @@ import (
 	"github.com/teemow/patty/internal/detect/azure"
 	"github.com/teemow/patty/internal/detect/gcp"
 	"github.com/teemow/patty/internal/detect/github"
+	"github.com/teemow/patty/internal/detect/gitlab"
+	"github.com/teemow/patty/internal/detect/grafana"
 	"github.com/teemow/patty/internal/detect/kubernetes"
+	"github.com/teemow/patty/internal/detect/npm"
 	"github.com/teemow/patty/internal/detect/oci"
 	"github.com/teemow/patty/internal/detect/openai"
+	"github.com/teemow/patty/internal/detect/pagerduty"
 	"github.com/teemow/patty/internal/detect/privatekey"
 	"github.com/teemow/patty/internal/detect/slack"
 	"github.com/teemow/patty/internal/detect/sops"
@@ -25,10 +29,14 @@ func Default() *detect.Registry {
 }
 
 // New returns a registry of every provider against its public API, in
-// report order, configured from env (ANTHROPIC_ADMIN_KEY, OPENAI_ADMIN_KEY).
-// The container registry provider comes last and knows the others, so a
-// registry password that is one of their credentials is reported as theirs.
+// report order, configured from env (ANTHROPIC_ADMIN_KEY, OPENAI_ADMIN_KEY,
+// GRAFANA_URL, GITLAB_URL). The container registry provider comes last and
+// knows the others, so a registry password that is one of their
+// credentials is reported as theirs.
 func New(env func(string) string) *detect.Registry {
-	peers := []detect.Provider{github.New(), slack.New(), aws.New(), gcp.New(), azure.New(), sops.New(), anthropic.New(), openai.New(), kubernetes.New(), privatekey.New()}
+	peers := []detect.Provider{
+		github.New(), gitlab.New(), slack.New(), aws.New(), gcp.New(), azure.New(), sops.New(),
+		anthropic.New(), openai.New(), grafana.New(), pagerduty.New(), npm.New(), kubernetes.New(), privatekey.New(),
+	}
 	return detect.NewRegistry(detect.Configure(env, append(peers, oci.New(peers...))...)...)
 }
