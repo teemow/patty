@@ -18,12 +18,17 @@ import (
 	"github.com/teemow/patty/internal/detect/sops"
 )
 
-// Default returns a registry of every provider against its public API, in
-// report order, configured from the environment (ANTHROPIC_ADMIN_KEY,
-// OPENAI_ADMIN_KEY). The container registry provider comes last and knows
-// the others, so a registry password that is one of their credentials is
-// reported as theirs.
+// Default returns the registry patty runs with: every provider against its
+// public API, configured from the process environment.
 func Default() *detect.Registry {
+	return New(os.Getenv)
+}
+
+// New returns a registry of every provider against its public API, in
+// report order, configured from env (ANTHROPIC_ADMIN_KEY, OPENAI_ADMIN_KEY).
+// The container registry provider comes last and knows the others, so a
+// registry password that is one of their credentials is reported as theirs.
+func New(env func(string) string) *detect.Registry {
 	peers := []detect.Provider{github.New(), slack.New(), aws.New(), gcp.New(), azure.New(), sops.New(), anthropic.New(), openai.New(), kubernetes.New(), privatekey.New()}
-	return detect.NewRegistry(detect.Configure(os.Getenv, append(peers, oci.New(peers...))...)...)
+	return detect.NewRegistry(detect.Configure(env, append(peers, oci.New(peers...))...)...)
 }

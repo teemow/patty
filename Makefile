@@ -18,6 +18,14 @@ test: ## Run tests
 lint: ## Run linter
 	@golangci-lint run
 
+.PHONY: docs
+docs: ## Regenerate the generated blocks in docs/ from the binary
+	@./scripts/gen-docs.sh
+
+.PHONY: docs-check
+docs-check: docs ## Fail when the generated blocks in docs/ are out of date
+	@git diff --exit-code -- docs/
+
 .PHONY: logo
 logo: ## Render the logo PNGs from assets/logo.svg
 	@rsvg-convert -h 640 assets/logo.svg -o assets/logo-light.png

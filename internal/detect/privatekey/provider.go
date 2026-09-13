@@ -21,8 +21,6 @@
 package privatekey
 
 import (
-	"context"
-	"errors"
 	"net/http"
 	"sync"
 	"time"
@@ -114,11 +112,4 @@ func (*Provider) LocalSources() detect.LocalSources {
 		Env:       []string{"SSH_PRIVATE_KEY", "COSIGN_KEY", "COSIGN_PRIVATE_KEY"},
 		HomeFiles: []string{".ssh/*", ".sigstore/*"},
 	}
-}
-
-// Revoke implements detect.Provider by refusing: there is no one to revoke
-// a key with. The registry never gets here, no kind is revocable; the
-// report carries the procedures instead.
-func (*Provider) Revoke(context.Context, []detect.Token) error {
-	return errors.New("private keys cannot be revoked; rotate them as the report says")
 }

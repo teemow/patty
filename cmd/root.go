@@ -79,7 +79,7 @@ func newRootCmd() *cobra.Command {
 	opts := defaults()
 	cmd := &cobra.Command{
 		Use:   "patty [target...]",
-		Short: "Finds leaked GitHub, Slack, AWS, Anthropic, OpenAI, registry, Kubernetes and sops credentials and private keys in every corner of a repository's history",
+		Short: "Finds leaked credentials in every corner of a repository's history, including the commits a clone never shows",
 		Long: `Patty checks the credentials in your git history -- all of it.
 
 A target is a local repository path, an owner/repo, a github.com URL, or a
@@ -88,29 +88,25 @@ bare owner (user or organization) to scan every repository of.
 GitHub repositories are mirrored into a size-capped cache (all branches,
 tags and pull request refs), extended with commits the repository activity
 feed reports as force-pushed away or deleted, and every object in the
-database is scanned -- reachable or not. patty looks for GitHub tokens,
-Slack tokens and webhooks, AWS access keys, Anthropic and OpenAI API keys,
-the registry logins in Docker configs and pull secrets together with Docker
-Hub and Quay tokens, the client certificates, tokens and logins of
-kubeconfigs, Kubernetes service account tokens, SSH, TLS and cosign
-private keys, and the age identities and PGP keys that decrypt sops
-secrets; for those it also lists the sops files in the scanned
-repositories that are encrypted to them, and for a private key the
+database is scanned -- reachable or not. Every credential kind patty knows
+belongs to a provider that finds it offline, verifying a built-in checksum
+where the format has one, and says what the shape alone reveals: the
+account an AWS key belongs to, the sops files an age identity decrypts, the
 certificates, authorized_keys files, image policies and GitHub accounts
-that trust its public half. The values of
-every Kubernetes Secret manifest are decoded and searched for all of the
-above, and a Secret committed with plaintext values is reported on its own
-(kind kubernetes-secret-manifest; --ignore takes kinds as well as
-fingerprints). Classic GitHub tokens and age identities are verified
-offline against their built-in checksum; --verify asks each provider
-whether a credential is still live, and --revoke asks it to revoke the
-live ones. Anthropic and OpenAI keys are revoked through the
-organization's admin key, read from ANTHROPIC_ADMIN_KEY and
-OPENAI_ADMIN_KEY. Kubernetes credentials are checked against the API
-server their kubeconfig names, over https only and never on a private
-network unless --verify-private-servers is given. An unencrypted SSH key
-is offered to github.com once, with no command, after GitHub's published
-host key fingerprints were checked.
+that trust a private key. The values of every Kubernetes Secret manifest
+are decoded and searched for all of them, and a Secret committed with
+plaintext values is reported on its own (kind kubernetes-secret-manifest;
+--ignore takes kinds as well as fingerprints).
+
+--verify asks each provider whether a credential is still live, and
+--revoke asks it to revoke the live ones. A provider whose API cannot
+revoke a key by itself takes the organization's admin key from the
+environment (ANTHROPIC_ADMIN_KEY, OPENAI_ADMIN_KEY). Kubernetes
+credentials are checked against the API server their kubeconfig names,
+over https only and never on a private network unless
+--verify-private-servers is given. An unencrypted SSH key is offered to
+github.com once, with no command, after GitHub's published host key
+fingerprints were checked.
 
 Every credential comes with advice: where its owner revokes it, whether it
 is still configured on this machine, and what its history needs.
