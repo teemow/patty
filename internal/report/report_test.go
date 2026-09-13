@@ -2,16 +2,23 @@ package report
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"filippo.io/age"
 
 	"github.com/teemow/patty/internal/detect"
 	"github.com/teemow/patty/internal/detect/aws"
 	"github.com/teemow/patty/internal/detect/github"
 	"github.com/teemow/patty/internal/detect/providers"
 	"github.com/teemow/patty/internal/detect/slack"
+	"github.com/teemow/patty/internal/detect/sops"
 	"github.com/teemow/patty/internal/gitrepo"
 	"github.com/teemow/patty/internal/scan"
 )
@@ -241,5 +248,102 @@ func TestAllRefs(t *testing.T) {
 	}
 	if got := reachability(loc, Options{AllRefs: true}); got != "on a, b, c, d, e, f, g" {
 		t.Fatalf("all = %q", got)
+	}
+}
+
+func TestRemediationUnlocks(t *testing.T) {
+	unverifiable := &detect.Verification{Status: detect.StatusUnverifiable}
+	many := scan.Finding{Kind: sops.KindAge, Verification: unverifiable, Unlocks: []scan.Unlock{
+		{Repo: "acme/infra", Path: "clusters/prod/a.sops.yaml"}, {Repo: "acme/infra", Path: "clusters/prod/b.sops.yaml"},
+		{Repo: "acme/infra", Path: "clusters/prod/c.sops.yaml"}, {Repo: "acme/infra", Path: "clusters/prod/d.sops.yaml"},
+		{Repo: "acme/app", Path: ".sops.yaml"},
+	}}
+	steps := Remediation(many, registry)
+	if len(steps) != 2 || steps[0].Label != "decrypts" || steps[0].Text != "acme/infra: 4 files (clusters/prod/a.sops.yaml, clusters/prod/b.sops.yaml, clusters/prod/c.sops.yaml, +1 more) · acme/app: 1 file (.sops.yaml)" {
+		t.Fatalf("steps = %+v", steps)
+	}
+	if steps[1].Label != "revoke" || !strings.Contains(steps[1].Text, "sops updatekeys") || !strings.Contains(steps[1].Text, "rotation protects future commits only") || strings.Contains(steps[1].Text, "--revoke") {
+		t.Fatalf("revoke step = %+v", steps[1])
+	}
+	none := scan.Finding{Kind: sops.KindPGP, Verification: unverifiable}
+	if steps := Remediation(none, registry); len(steps) != 2 || steps[0].Text != "no sops file in the scanned repositories lists this key as a recipient" || !strings.Contains(steps[1].Text, "revocation certificate") {
+		t.Fatalf("steps = %+v", steps)
+	}
+	// Other providers do not get the line, even with unlocks set by mistake.
+	if steps := Remediation(scan.Finding{Kind: github.KindPAT, Unlocks: many.Unlocks}, registry); len(steps) != 1 || steps[0].Label != "revoke" {
+		t.Fatalf("steps = %+v", steps)
+	}
+}
+
+// git runs git in dir with a fixed identity and no user configuration.
+func git(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
+		"GIT_AUTHOR_NAME=Selma Bouvier", "GIT_AUTHOR_EMAIL=selma@dmv.springfield",
+		"GIT_COMMITTER_NAME=Selma Bouvier", "GIT_COMMITTER_EMAIL=selma@dmv.springfield",
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+// TestTextShowsWhatAnIdentityDecrypts scans a repository that holds an age
+// identity, generated at runtime, next to a .sops.yaml and an encrypted file
+// naming its recipient, and checks the report end to end.
+func TestTextShowsWhatAnIdentityDecrypts(t *testing.T) {
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipient := id.Recipient().String()
+	dir := t.TempDir()
+	git(t, dir, "init", "-q", "-b", "main")
+	files := map[string]string{
+		"keys.txt":         "# public key: " + recipient + "\n" + id.String() + "\n",
+		".sops.yaml":       "creation_rules:\n  - age: " + recipient + "\n",
+		"prod.sops.yaml":   "token: ENC[AES256_GCM,data:abc,iv:def,tag:ghi,type:str]\nsops:\n    age:\n        - recipient: " + recipient + "\n          enc: irrelevant\n",
+		"public.sops.yaml": "token: ENC[AES256_GCM,data:abc,iv:def,tag:ghi,type:str]\nsops:\n    age:\n        - recipient: age1" + strings.Repeat("q", 58) + "\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "add secrets")
+	repo, err := gitrepo.Open(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := scan.Repo(context.Background(), "acme/infra", repo, nil, scan.Options{Workers: 1, Verify: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	Text(&buf, []scan.Result{res}, Options{})
+	out := buf.String()
+	if strings.Contains(out, id.String()) {
+		t.Fatalf("the identity must be redacted:\n%s", out)
+	}
+	for _, want := range []string{
+		"1 credential found",
+		"● unverifiable age-identity             AGE-SECR",
+		"recipient " + recipient,
+		"no issuer to ask: valid by construction (the checksum holds)",
+		"acme/infra  keys.txt:2",
+		"↳ decrypts acme/infra: 2 files (.sops.yaml, prod.sops.yaml)",
+		"↳ revoke   nothing to revoke, an age identity is valid for as long as it exists; rotate instead: remove it from .sops.yaml, run `sops updatekeys`",
+		"rewriting history (see history below) is the only remedy for the past",
+		"↳ history  acme/infra: in branch history (rewrite with git filter-repo, then force-push)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "public.sops.yaml") || strings.Contains(out, "shape match") {
+		t.Fatalf("a file encrypted to someone else is not listed, and the checksum was verified:\n%s", out)
 	}
 }

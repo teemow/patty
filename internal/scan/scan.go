@@ -86,10 +86,20 @@ type Finding struct {
 	// Revocation records what happened when patty asked the provider to revoke the credential.
 	Revocation Revocation `json:"revocation,omitempty"`
 	// Local lists where the same token is configured on this machine.
-	Local     []string   `json:"local,omitempty"`
+	Local []string `json:"local,omitempty"`
+	// Unlocks lists the files in the scanned repositories the credential
+	// opens, when its provider correlates findings with the content around
+	// them: the sops files encrypted to an age identity.
+	Unlocks   []Unlock   `json:"unlocks,omitempty"`
 	Locations []Location `json:"locations"`
 	// Occurrences counts objects the token appears in, across all locations.
 	Occurrences int `json:"occurrences"`
+}
+
+// Unlock is one file a credential opens; see Finding.Unlocks.
+type Unlock struct {
+	Repo string `json:"repo"`
+	Path string `json:"path"`
 }
 
 // Active reports whether the provider confirmed the credential as live.
@@ -169,16 +179,27 @@ func Repo(ctx context.Context, name string, repo *gitrepo.Repo, rewrites []Rewri
 	}
 
 	var (
-		mu       sync.Mutex
-		bytes    int64
-		findings = map[string]*Finding{}
-		hits     = map[string]map[hit]bool{} // token value -> distinct locations
-		registry = opts.providers()
+		mu          sync.Mutex
+		bytes       int64
+		findings    = map[string]*Finding{}
+		hits        = map[string]map[hit]bool{} // token value -> distinct locations
+		registry    = opts.providers()
+		correlators = registry.Correlators()
+		sightings   = map[string][]string{} // blob -> identifiers it names, per correlators
 	)
 	err = parallel(ctx, shas, opts.workers(), func(shard []string) error {
 		var local int64
 		err := repo.ReadObjects(ctx, shard, func(obj gitrepo.Object, content []byte) error {
 			local += obj.Size
+			if obj.Type == "blob" {
+				for _, c := range correlators {
+					if ids := c.Observe(content); len(ids) > 0 {
+						mu.Lock()
+						sightings[obj.SHA] = append(sightings[obj.SHA], ids...)
+						mu.Unlock()
+					}
+				}
+			}
 			for _, tok := range registry.Find(content) {
 				if opts.Ignore[tok.Fingerprint()] {
 					continue
@@ -210,9 +231,11 @@ func Repo(ctx context.Context, name string, repo *gitrepo.Repo, rewrites []Rewri
 	res.Stats.Bytes = bytes
 
 	if len(findings) > 0 {
-		if err := attribute(ctx, name, repo, commits, rewrites, findings, hits, &res.Stats); err != nil {
+		paths, err := attribute(ctx, name, repo, commits, rewrites, findings, hits, &res.Stats)
+		if err != nil {
 			return res, err
 		}
+		correlate(name, registry, findings, sightings, paths)
 	}
 	for _, f := range findings {
 		if opts.Verify {
@@ -283,11 +306,51 @@ func rank(f Finding) int {
 	}
 }
 
-// attribute resolves paths, introducing commits and refs for every hit.
-func attribute(ctx context.Context, name string, repo *gitrepo.Repo, commits []string, rewrites []Rewrite, findings map[string]*Finding, hits map[string]map[hit]bool, stats *Stats) error {
+// correlate lists on every finding of a correlating provider the files of
+// this repository that name the credential: the sops files encrypted to an
+// identity's recipient. Every version of a file counts once; a blob no
+// commit reaches has no path and is left out.
+func correlate(repo string, registry *detect.Registry, findings map[string]*Finding, sightings map[string][]string, paths map[string]string) {
+	if len(sightings) == 0 {
+		return
+	}
+	pathsOf := map[string]map[string]bool{} // identifier -> paths naming it
+	for sha, ids := range sightings {
+		path := paths[sha]
+		if path == "" {
+			continue
+		}
+		for _, id := range ids {
+			if pathsOf[id] == nil {
+				pathsOf[id] = map[string]bool{}
+			}
+			pathsOf[id][path] = true
+		}
+	}
+	for _, f := range findings {
+		c, ok := registry.Provider(f.Kind).(detect.Correlator)
+		if !ok {
+			continue
+		}
+		seen := map[string]bool{}
+		for _, id := range c.Identifiers(f.Detected()) {
+			for path := range pathsOf[id] {
+				if !seen[path] {
+					seen[path] = true
+					f.Unlocks = append(f.Unlocks, Unlock{Repo: repo, Path: path})
+				}
+			}
+		}
+		sort.Slice(f.Unlocks, func(i, j int) bool { return f.Unlocks[i].Path < f.Unlocks[j].Path })
+	}
+}
+
+// attribute resolves paths, introducing commits and refs for every hit. It
+// returns the path of every object it could map, for correlate.
+func attribute(ctx context.Context, name string, repo *gitrepo.Repo, commits []string, rewrites []Rewrite, findings map[string]*Finding, hits map[string]map[hit]bool, stats *Stats) (map[string]string, error) {
 	reachable, err := repo.ReachableCommits(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var orphanRoots []string
 	for _, c := range commits {
@@ -299,12 +362,12 @@ func attribute(ctx context.Context, name string, repo *gitrepo.Repo, commits []s
 
 	paths, err := repo.ObjectPaths(ctx, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(orphanRoots) > 0 {
 		orphanPaths, err := repo.ObjectPaths(ctx, orphanRoots)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		for sha, p := range orphanPaths {
 			if _, ok := paths[sha]; !ok {
@@ -335,7 +398,7 @@ func attribute(ctx context.Context, name string, repo *gitrepo.Repo, commits []s
 					}
 				}
 				if err != nil {
-					return err
+					return nil, err
 				}
 				objects[h.object.SHA] = a
 			}
@@ -344,7 +407,7 @@ func attribute(ctx context.Context, name string, repo *gitrepo.Repo, commits []s
 				refs, ok := refsOf[a.commit.SHA]
 				if !ok {
 					if refs, err = repo.RefsContaining(ctx, a.commit.SHA); err != nil {
-						return err
+						return nil, err
 					}
 					refsOf[a.commit.SHA] = refs
 					if len(refs) == 0 {
@@ -373,7 +436,7 @@ func attribute(ctx context.Context, name string, repo *gitrepo.Repo, commits []s
 			return a.Line < b.Line
 		})
 	}
-	return nil
+	return paths, nil
 }
 
 // parallel splits items into contiguous shards and runs fn on each

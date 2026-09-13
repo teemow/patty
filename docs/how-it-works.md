@@ -23,7 +23,7 @@ Local targets skip steps 1 and 2 and scan the object database as it is, reflog a
 
 ## Detection
 
-Detection, verification and revocation are organised per **provider**; each provider knows its own token formats, its API and where its tools keep tokens on a developer machine. patty ships with three:
+Detection, verification and revocation are organised per **provider**; each provider knows its own token formats, its API and where its tools keep tokens on a developer machine. patty ships with four:
 
 | Provider | Prefix | Kind | Verified offline |
 |----------|--------|------|------------------|
@@ -41,6 +41,8 @@ Detection, verification and revocation are organised per **provider**; each prov
 | Slack | `https://hooks.slack.com/services/`, `/workflows/`, `/triggers/` | incoming webhook URL | shape; names the team id |
 | AWS | `AKIA` (also `ABIA`, `ACCA`, `A3T…`) | access key | shape; names the account id, pairs the secret found next to it |
 | AWS | `ASIA` | temporary access key (STS) | shape; names the account id, pairs the secret and session token found next to it |
+| sops | `AGE-SECRET-KEY-1` | age identity | checksum (Bech32); names the public key it belongs to |
+| sops | armored PGP private key block | PGP private key | the key parses and its self-signatures verify; names the fingerprint and user id, says whether it is passphrase-protected |
 
 The classic GitHub families carry a [CRC32 checksum](https://github.blog/engineering/platform-security/behind-githubs-new-authentication-token-formats/) in their last six characters, Base62-encoded. patty recomputes it: a string with the right prefix and length but a wrong checksum is not a token and is not reported. That removes the false positives a pure regex match has to live with -- a `ghp_` followed by 36 random alphanumerics in a test fixture, a hash, a minified bundle -- and is why the report needs no allow-list to stay readable. The fine-grained format does not have a documented checksum, so it is matched on its shape (`github_pat_`, 22 characters, `_`, 59 characters) and best confirmed with `--verify`.
 
@@ -48,20 +50,24 @@ Slack tokens have no checksum, but their shapes are strict: fixed-length numeric
 
 An AWS access key id is a four-character prefix and sixteen characters of the base32 alphabet (`A-Z`, `2-7`), so it never contains `0`, `1`, `8` or `9`. The base32 body encodes the id of the account the key was issued in, which patty decodes offline and shows as *account 123456789012*. A key id is only usable together with its secret access key, forty characters of base64, so patty looks for one in the same object: preferring a run named by `aws_secret_access_key`, `SecretAccessKey` or `secret_key`, then one on the key's own line or the line after it, then the closest one, and for a temporary key also the session token that goes with it. The report says whether it found a *key pair* or a *key id only*. The secret is what makes a leak exploitable, but it is never shown, fingerprinted or written to the JSON; the key id is the credential's name throughout.
 
-The scan itself is a handful of substring searches per object (`gh`, `github_pat_`, `xoxb-`, `xoxp-`, `xapp-1-`, `xoxe`, `https://hooks.slack.com/`, `AKIA`, `ASIA`, `ABIA`, `ACCA`, `A3T`) with an exact shape and, where there is one, checksum check at each candidate; only an object that holds an AWS key id is searched for its secret. It runs at about 1 GB/s per core; `git` decompressing objects is the bottleneck, which is why the readers run in parallel.
+An age identity is `AGE-SECRET-KEY-1` followed by 58 characters of the Bech32 alphabet, the last six of which are a checksum. patty parses every candidate with the age library; a string that fails the checksum is not an identity and is not reported, just like a classic GitHub token with a wrong CRC. The public key (`age1…`) is derived from the secret and shown as the attribution: it is not secret, and it is what a `.sops.yaml` lists as a recipient. A PGP private key is found by its armor header, parsed as an OpenPGP key ring, and named by the fingerprint of its primary key, the forty hex characters `gpg --list-secret-keys` and sops show. The armored block itself is not kept; the report says whose key it is and whether the secret material is passphrase-protected, which makes the leak smaller as long as the passphrase was not committed next to it. Encrypted sops content (`ENC[…]` values, `sops:` metadata) is ciphertext and is not reported.
+
+What makes a leaked identity matter is what it decrypts. While scanning, the sops provider also watches every blob that looks like sops material -- a `.sops.yaml` with `creation_rules`, or a file with `ENC[` values or a `sops:` metadata block -- for `age1…` recipients and forty-character PGP fingerprints, and remembers only which object named which recipient. After the scan every identity found is matched against those sightings, and the report lists the repositories and files encrypted to it. The identity file itself names its public key in a comment but is not sops material, so it does not count as something the key decrypts. Recipients in repositories that were not scanned are, of course, not known.
+
+The scan itself is a handful of substring searches per object (`gh`, `github_pat_`, `xoxb-`, `xoxp-`, `xapp-1-`, `xoxe`, `https://hooks.slack.com/`, `AKIA`, `ASIA`, `ABIA`, `ACCA`, `A3T`, `AGE-SECRET-KEY-1`, the PGP armor header, and the three sops markers) with an exact shape and, where there is one, checksum check at each candidate; only an object that holds an AWS key id is searched for its secret, and only sops material for recipients. It runs at about 1 GB/s per core; `git` decompressing objects is the bottleneck, which is why the readers run in parallel.
 
 ## Compared with gitleaks
 
-[gitleaks](https://github.com/gitleaks/gitleaks) is a general secret scanner with more than 200 rules, allow-lists, baselines and CI integrations. patty is a narrow tool with one question: *is there a GitHub, Slack or AWS credential anywhere in this repository's past?* Where they overlap the differences are:
+[gitleaks](https://github.com/gitleaks/gitleaks) is a general secret scanner with more than 200 rules, allow-lists, baselines and CI integrations. patty is a narrow tool with one question: *is there a GitHub, Slack or AWS credential, or a key that decrypts sops secrets, anywhere in this repository's past?* Where they overlap the differences are:
 
 | | gitleaks `git` | patty |
 |---|---|---|
 | History covered | commits reachable from refs (`git log -p --all`) | every object in the database, plus `refs/pull/*` and force-pushed or deleted commits fetched from GitHub |
 | Unit of work | each commit's diff; content that appears in many commits is scanned as often | each object once |
-| GitHub, Slack and AWS credentials | regex + entropy | exact shape + checksum where the format has one, offline attribution, optional live check |
+| GitHub, Slack, AWS and sops credentials | regex + entropy | exact shape + checksum where the format has one, offline attribution, optional live check; for sops identities, the files they decrypt |
 | Where it points | commit and file of each occurrence | oldest introducing commit, all refs that still contain it, and how orphaned commits went unreachable |
 | Scope | one repository or directory | any number of repositories, whole owners, with a disk budget |
-| Everything else | Stripe, private keys, ... | GitHub, Slack and AWS credentials only |
+| Everything else | Stripe, SSH keys, ... | GitHub, Slack, AWS and sops credentials only |
 
 Use both: gitleaks in CI on every push, patty when you want to know what is already out there.
 

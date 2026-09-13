@@ -2,9 +2,11 @@
 // report can say that a leaked token is not just out there but still in use
 // right here.
 //
-// Each provider says where its tools keep tokens; the working directory's
-// .env files are checked for every provider. Only fingerprints leave this
-// package; token values are hashed as soon as they are read.
+// Each provider says where its tools keep tokens: environment variables
+// holding a token or naming a file, files under the config and home
+// directories, commands that print one. The working directory's .env files
+// are checked for every provider. Only fingerprints leave this package;
+// token values are hashed as soon as they are read.
 package localcreds
 
 import (
@@ -56,9 +58,9 @@ func Find(ctx context.Context, registry *detect.Registry) []Credential {
 			}
 		}
 	}
-	for _, path := range candidateFiles(sources) {
-		if content, err := os.ReadFile(path); err == nil {
-			add(content, display(path))
+	for _, c := range candidateFiles(sources) {
+		if content, err := os.ReadFile(c.path); err == nil {
+			add(content, c.source)
 		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -83,18 +85,34 @@ func Match(creds []Credential) map[string][]string {
 	return m
 }
 
-func candidateFiles(sources []detect.LocalSources) []string {
-	var paths []string
+// candidate is a file that may hold credentials, and how to name it in the
+// report.
+type candidate struct {
+	path, source string
+}
+
+// candidateFiles lists every file the providers point at, each once. A file
+// named by an environment variable comes first, so that its source says
+// which variable led there when a provider also lists the path itself.
+func candidateFiles(sources []detect.LocalSources) []candidate {
+	var cands []candidate
 	config, home := configDir(), homeDir()
+	for _, s := range sources {
+		for _, name := range s.EnvFiles {
+			if path := os.Getenv(name); path != "" {
+				cands = append(cands, candidate{path, display(path) + " ($" + name + ")"})
+			}
+		}
+	}
 	for _, s := range sources {
 		if config != "" {
 			for _, f := range s.ConfigFiles {
-				paths = append(paths, filepath.Join(config, f))
+				cands = append(cands, candidate{path: filepath.Join(config, f)})
 			}
 		}
 		if home != "" {
 			for _, f := range s.HomeFiles {
-				paths = append(paths, filepath.Join(home, f))
+				cands = append(cands, candidate{path: filepath.Join(home, f)})
 			}
 		}
 	}
@@ -102,18 +120,23 @@ func candidateFiles(sources []detect.LocalSources) []string {
 		if matches, err := filepath.Glob(pattern); err == nil {
 			for _, m := range matches {
 				if abs, err := filepath.Abs(m); err == nil {
-					paths = append(paths, abs)
+					cands = append(cands, candidate{path: abs})
 				}
 			}
 		}
 	}
 	seen := map[string]bool{}
-	uniq := paths[:0]
-	for _, p := range paths {
-		if !seen[p] {
-			seen[p] = true
-			uniq = append(uniq, p)
+	uniq := cands[:0]
+	for _, c := range cands {
+		c.path = filepath.Clean(c.path)
+		if seen[c.path] {
+			continue
 		}
+		seen[c.path] = true
+		if c.source == "" {
+			c.source = display(c.path)
+		}
+		uniq = append(uniq, c)
 	}
 	return uniq
 }
