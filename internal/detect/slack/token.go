@@ -70,27 +70,26 @@ func secret(content []byte, pos, lo, hi int, ok func(byte) bool) (int, bool) {
 }
 
 func botAt(content []byte, start int) (detect.Token, bool) {
-	ids, pos, ok := groups(content, start+len("xoxb-"), 2, idMin, idMax, detect.IsDigit)
-	if !ok {
-		return detect.Token{}, false
-	}
-	end, ok := secret(content, pos, botSecretLen, botSecretLen, detect.IsAlnum)
-	if !ok {
-		return detect.Token{}, false
-	}
-	return detect.Token{Kind: KindBot, Value: string(content[start:end]), Offset: start, Attribution: "team " + ids[0] + ", bot " + ids[1]}, true
+	return principalAt(content, start, KindBot, "xoxb-", 2, botSecretLen, botSecretLen, "bot")
 }
 
 func userAt(content []byte, start int) (detect.Token, bool) {
-	ids, pos, ok := groups(content, start+len("xoxp-"), 3, idMin, idMax, detect.IsDigit)
+	return principalAt(content, start, KindUser, "xoxp-", 3, userSecretMin, userSecretMax, "user")
+}
+
+// principalAt matches a token issued to a bot or a user: prefix, n numeric
+// id groups, of which the first is the team and the second the principal,
+// and a secret of between lo and hi alphanumerics.
+func principalAt(content []byte, start int, kind detect.Kind, prefix string, n, lo, hi int, role string) (detect.Token, bool) {
+	ids, pos, ok := groups(content, start+len(prefix), n, idMin, idMax, detect.IsDigit)
 	if !ok {
 		return detect.Token{}, false
 	}
-	end, ok := secret(content, pos, userSecretMin, userSecretMax, detect.IsAlnum)
+	end, ok := secret(content, pos, lo, hi, detect.IsAlnum)
 	if !ok {
 		return detect.Token{}, false
 	}
-	return detect.Token{Kind: KindUser, Value: string(content[start:end]), Offset: start, Attribution: "team " + ids[0] + ", user " + ids[1]}, true
+	return detect.Token{Kind: kind, Value: string(content[start:end]), Offset: start, Attribution: "team " + ids[0] + ", " + role + " " + ids[1]}, true
 }
 
 func appAt(content []byte, start int) (detect.Token, bool) {
