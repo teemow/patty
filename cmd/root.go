@@ -68,7 +68,7 @@ var opts flags
 
 var rootCmd = &cobra.Command{
 	Use:   "patty [target...]",
-	Short: "Finds leaked GitHub, Slack, AWS, Anthropic, OpenAI and sops credentials in every corner of a repository's history",
+	Short: "Finds leaked GitHub, Slack, AWS, Anthropic, OpenAI, registry and sops credentials in every corner of a repository's history",
 	Long: `Patty checks the credentials in your git history -- all of it.
 
 A target is a local repository path, an owner/repo, a github.com URL, or a
@@ -79,7 +79,9 @@ tags and pull request refs), extended with commits the repository activity
 feed reports as force-pushed away or deleted, and every object in the
 database is scanned -- reachable or not. patty looks for GitHub tokens,
 Slack tokens and webhooks, AWS access keys, Anthropic and OpenAI API keys,
-and the age identities and PGP keys that decrypt sops secrets; for those it
+the registry logins in Docker configs and pull secrets together with Docker
+Hub and Quay tokens, and the age identities and PGP keys that decrypt sops
+secrets; for those it
 also lists the sops files in the scanned repositories that are encrypted to
 them. Classic GitHub tokens and age identities are verified offline against
 their built-in checksum; --verify asks each provider whether a credential

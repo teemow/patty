@@ -30,7 +30,9 @@ signed with the key itself, which only works when the input holds the key
 id and its secret and the user may manage its own keys. Anthropic and
 OpenAI keys are found in the organization's key list and deactivated or
 deleted through its Admin API, which needs an admin key of that
-organization in ANTHROPIC_ADMIN_KEY or OPENAI_ADMIN_KEY.
+organization in ANTHROPIC_ADMIN_KEY or OPENAI_ADMIN_KEY. A Docker Hub
+personal access token logs in, finds itself in its account's token list
+and sets itself inactive, which a read-only token may not.
 
 Tokens are read from the arguments, or from standard input when there are
 none, so a value never has to touch the shell history:
@@ -41,12 +43,14 @@ none, so a value never has to touch the shell history:
 Anything that is not a well-formed token is ignored. GitHub personal access
 tokens (classic and fine-grained), OAuth tokens, user-to-server and refresh
 tokens can be revoked, as can Slack bot, user and refresh tokens, AWS
-access key pairs, Anthropic API keys and OpenAI project, service account
-and admin keys (with an admin key configured). GitHub installation tokens,
-Slack app-level and configuration tokens and webhooks, temporary AWS keys,
-Anthropic admin keys and OAuth tokens, and legacy OpenAI user keys cannot;
-the report says where to revoke those by hand. Age identities and PGP keys
-have no one to revoke them with; the report says how to rotate them.`,
+access key pairs, Anthropic API keys, OpenAI project, service account
+and admin keys (with an admin key configured), and Docker Hub personal
+access tokens. GitHub installation tokens, Slack app-level and
+configuration tokens and webhooks, temporary AWS keys, Anthropic admin keys
+and OAuth tokens, legacy OpenAI user keys, and every other registry
+credential cannot; the report says where to revoke those by hand. Age
+identities and PGP keys have no one to revoke them with; the report says
+how to rotate them.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.yes = yes

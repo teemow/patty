@@ -102,6 +102,10 @@ type KindInfo struct {
 	UnlocksLabel string
 	// UnlocksNone is that line when nothing scanned names the credential.
 	UnlocksNone string
+	// PublicValue reports that Token.Value names the credential without
+	// revealing it, such as a registry login's host and username whose
+	// secret is the password in Token.Secret; the report shows it in full.
+	PublicValue bool
 }
 
 // LocalSources names where a provider's credentials are configured on the

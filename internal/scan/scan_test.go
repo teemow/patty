@@ -2,6 +2,7 @@ package scan
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -15,6 +16,7 @@ import (
 	"github.com/teemow/patty/internal/detect"
 	"github.com/teemow/patty/internal/detect/aws"
 	"github.com/teemow/patty/internal/detect/github"
+	"github.com/teemow/patty/internal/detect/registry"
 	"github.com/teemow/patty/internal/detect/slack"
 	"github.com/teemow/patty/internal/detect/sops"
 	"github.com/teemow/patty/internal/disk"
@@ -176,6 +178,38 @@ func TestRepoCompletesKeyPairAcrossObjects(t *testing.T) {
 		if out, _ := json.Marshal(res); strings.Contains(string(out), secret) || strings.Contains(string(out), keyID) {
 			t.Fatalf("neither the secret nor the key id may reach the JSON: %s", out)
 		}
+	}
+}
+
+func TestRepoReportsOneLoginPerRegistryHost(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	config := `{"auths":{"quay.io":{"auth":"` + base64.StdEncoding.EncodeToString([]byte("acme+ci:"+strings.Repeat("robot", 6))) + `"},"registry.example.com":{"username":"deploy","password":"hunter2hunter2"}}}`
+	manifest := "apiVersion: v1\nkind: Secret\ntype: kubernetes.io/dockerconfigjson\ndata:\n  .dockerconfigjson: " + base64.StdEncoding.EncodeToString([]byte(config)) + "\n"
+	git(t, dir, "init", "-q", "-b", "main")
+	write(t, filepath.Join(dir, "pull-secret.yaml"), manifest)
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-q", "-m", "add pull secret")
+	repo, err := gitrepo.Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := Repo(ctx, "fixture", repo, nil, Options{})
+	if err != nil || len(res.Findings) != 2 {
+		t.Fatalf("%d findings, %v: %+v", len(res.Findings), err, res.Findings)
+	}
+	for _, f := range res.Findings {
+		// A login is named by host and user, which reveal nothing, so the
+		// report shows it in full; the password stays in Secret.
+		if f.Provider != "Registry" || f.Redacted != f.Token || !strings.Contains(f.Token, "/") || f.Secret == "" || len(f.Locations) != 1 || f.Locations[0].Line != 5 {
+			t.Errorf("%+v", f)
+		}
+	}
+	if res.Findings[0].Kind != registry.KindQuayLogin || res.Findings[0].Token != "quay.io/acme+ci" || res.Findings[1].Token != "registry.example.com/deploy" {
+		t.Errorf("findings %+v", res.Findings)
+	}
+	if out, _ := json.Marshal(res); strings.Contains(string(out), "hunter2") || strings.Contains(string(out), "robotrobot") {
+		t.Fatalf("passwords may not reach the JSON: %s", out)
 	}
 }
 
