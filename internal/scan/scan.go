@@ -252,12 +252,16 @@ func Repo(ctx context.Context, name string, repo *gitrepo.Repo, rewrites []Rewri
 // NewFinding starts the finding for a credential: provider, kind,
 // fingerprint and redacted value, with no locations yet.
 func NewFinding(registry *detect.Registry, tok detect.Token) *Finding {
+	redacted := detect.Redact(tok.Value)
+	if registry.Info(tok.Kind).PublicValue {
+		redacted = tok.Value
+	}
 	return &Finding{
 		Provider:         registry.ProviderName(tok.Kind),
 		Kind:             tok.Kind,
 		Fingerprint:      tok.Fingerprint(),
 		Token:            tok.Value,
-		Redacted:         detect.Redact(tok.Value),
+		Redacted:         redacted,
 		ChecksumVerified: tok.ChecksumVerified,
 		Attribution:      tok.Attribution,
 		Secret:           tok.Secret,

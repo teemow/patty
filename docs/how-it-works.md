@@ -23,7 +23,7 @@ Local targets skip steps 1 and 2 and scan the object database as it is, reflog a
 
 ## Detection
 
-Detection, verification and revocation are organised per **provider**; each provider knows its own token formats, its API and where its tools keep tokens on a developer machine. patty ships with six:
+Detection, verification and revocation are organised per **provider**; each provider knows its own token formats, its API and where its tools keep tokens on a developer machine. patty ships with seven:
 
 | Provider | Prefix | Kind | Verified offline |
 |----------|--------|------|------------------|
@@ -51,6 +51,11 @@ Detection, verification and revocation are organised per **provider**; each prov
 | OpenAI | `sk-` | legacy user key | shape: the marker between two runs of 20 alphanumerics |
 | sops | `AGE-SECRET-KEY-1` | age identity | checksum (Bech32); names the public key it belongs to |
 | sops | armored PGP private key block | PGP private key | the key parses and its self-signatures verify; names the fingerprint and user id, says whether it is passphrase-protected |
+| Registry | `"auths"` map of a Docker config, in the clear, escaped in a JSON or YAML string, or base64 under `dockerconfigjson` | `docker-hub-login`, `quay-login`, `acr-login`, `ghcr-login`, `gcr-login`, `ecr-login`, `harbor-login`, `registry-login`, by host | decoded: names the host and user; the password is kept apart and never shown; absent from gitleaks |
+| Registry | `Authorization: Basic …` next to a `/v2/` URL or a registry domain | login of that registry | decoded; any other Basic header is left alone |
+| Registry | `dckr_pat_`, `dckr_oat_` | Docker Hub personal or organization access token | shape only; names the username found next to it; absent from gitleaks |
+| Registry | 64 upper-case alphanumerics next to an `org+robot` name | Quay robot account token | shape only; names the robot; absent from gitleaks |
+| Registry | 40 alphanumerics next to a `quay.io` mention | Quay OAuth access token | shape only; absent from gitleaks |
 
 The classic GitHub families carry a [CRC32 checksum](https://github.blog/engineering/platform-security/behind-githubs-new-authentication-token-formats/) in their last six characters, Base62-encoded. patty recomputes it: a string with the right prefix and length but a wrong checksum is not a token and is not reported. That removes the false positives a pure regex match has to live with -- a `ghp_` followed by 36 random alphanumerics in a test fixture, a hash, a minified bundle -- and is why the report needs no allow-list to stay readable. The fine-grained format does not have a documented checksum, so it is matched on its shape (`github_pat_`, 22 characters, `_`, 59 characters) and best confirmed with `--verify`.
 
@@ -64,20 +69,24 @@ An age identity is `AGE-SECRET-KEY-1` followed by 58 characters of the Bech32 al
 
 What makes a leaked identity matter is what it decrypts. While scanning, the sops provider also watches every blob that looks like sops material -- a `.sops.yaml` with `creation_rules`, or a file with `ENC[` values or a `sops:` metadata block -- for `age1…` recipients and forty-character PGP fingerprints, and remembers only which object named which recipient. After the scan every identity found is matched against those sightings, and the report lists the repositories and files encrypted to it. The identity file itself names its public key in a comment but is not sops material, so it does not count as something the key decrypts. Recipients in repositories that were not scanned are, of course, not known.
 
-The scan itself is a handful of substring searches per object (`gh`, `github_pat_`, `xoxb-`, `xoxp-`, `xapp-1-`, `xoxe`, `https://hooks.slack.com/`, `AKIA`, `ASIA`, `ABIA`, `ACCA`, `A3T`, `sk-ant-`, `T3BlbkFJ`, `AGE-SECRET-KEY-1`, the PGP armor header, and the three sops markers) with an exact shape and, where there is one, checksum check at each candidate; only an object that holds an AWS key id is searched for its secret, and only sops material for recipients. It runs at about 1 GB/s per core; `git` decompressing objects is the bottleneck, which is why the readers run in parallel.
+Registry logins are not tokens with a prefix but a username and a password for one host, kept in the `auths` map of a Docker config. That config turns up as `~/.docker/config.json`, as the `.dockerconfigjson` of a Kubernetes Secret of type `kubernetes.io/dockerconfigjson` (base64 under `data`, or in the clear under `stringData`), inline in Helm values as an escaped JSON string or as base64, and each entry keeps its login either as `username` and `password` or as `auth`, the base64 of `user:password`. patty finds the `auths` key, parses the map that follows it, and peels at most two base64 layers (the Secret's and the entry's) to get at each login. Entries that only name a `credsStore` or `credHelpers` keep their secret in the OS keychain and yield nothing. Each login is one finding named `host/username`, which reveals nothing and is shown in full, with the kind derived from the host: Docker Hub, quay.io, `*.azurecr.io`, ghcr.io, gcr.io and `*.pkg.dev`, ECR (`*.dkr.ecr.*.amazonaws.com`, whose passwords expire within twelve hours), a host with *harbor* in its name, and everything else as `registry-login`. The password travels apart from the name and is never shown, fingerprinted or written to the JSON. When the password is itself a Docker Hub or Quay token, the finding is that token, so the same credential is one finding whether it turns up in a pull secret or in a CI variable; when it is another provider's credential, a GitHub token used against ghcr.io, the login says *password is a GitHub personal access token, reported separately* and that provider's finding carries the token (patty hands it over itself when the password sat in base64 no other provider could see). A `Basic` Authorization header is decoded the same way when the text around it names a registry, a `/v2/` URL or a known registry domain; a Basic header aimed at anything else is left alone.
+
+Docker Hub tokens have a prefix (`dckr_pat_` for personal, `dckr_oat_` for organization access tokens) but no documented length, so patty accepts 24 to 40 characters of the URL-safe base64 alphabet after it and looks for the username written next to the token (`username`, `user`, `-u`), which a Docker Hub token is useless without. Quay robot tokens are 64 upper-case alphanumerics with no prefix at all, indistinguishable from a hash on their own, so one is only reported next to its robot's `org+robot` name, and a run that is all hexadecimal is a hash. Quay OAuth tokens, 40 alphanumerics of mixed case, are only reported near a `quay.io` mention and never from inside a base64 value the decoder already consumed. Azure and Harbor passwords have no shape of their own and are found through the config decoder only. None of these shapes has a rule in gitleaks.
+
+The scan itself is a handful of substring searches per object (`gh`, `github_pat_`, `xoxb-`, `xoxp-`, `xapp-1-`, `xoxe`, `https://hooks.slack.com/`, `AKIA`, `ASIA`, `ABIA`, `ACCA`, `A3T`, `sk-ant-`, `T3BlbkFJ`, `AGE-SECRET-KEY-1`, the PGP armor header, the three sops markers, `auths`, `dockerconfigjson`, `Basic `, `dckr_pat_` and `dckr_oat_`, plus one pass over the alphanumeric runs for Quay tokens) with an exact shape and, where there is one, checksum check at each candidate; only an object that holds an AWS key id is searched for its secret, only sops material for recipients, and only a Docker config is parsed as JSON. It runs at about 1 GB/s per core; `git` decompressing objects is the bottleneck, which is why the readers run in parallel.
 
 ## Compared with gitleaks
 
-[gitleaks](https://github.com/gitleaks/gitleaks) is a general secret scanner with more than 200 rules, allow-lists, baselines and CI integrations. patty is a narrow tool with one question: *is there a GitHub, Slack, AWS, Anthropic or OpenAI credential, or a key that decrypts sops secrets, anywhere in this repository's past?* Where they overlap the differences are:
+[gitleaks](https://github.com/gitleaks/gitleaks) is a general secret scanner with more than 200 rules, allow-lists, baselines and CI integrations. patty is a narrow tool with one question: *is there a GitHub, Slack, AWS, Anthropic, OpenAI or container registry credential, or a key that decrypts sops secrets, anywhere in this repository's past?* Where they overlap the differences are:
 
 | | gitleaks `git` | patty |
 |---|---|---|
 | History covered | commits reachable from refs (`git log -p --all`) | every object in the database, plus `refs/pull/*` and force-pushed or deleted commits fetched from GitHub |
 | Unit of work | each commit's diff; content that appears in many commits is scanned as often | each object once |
-| GitHub, Slack, AWS, Anthropic, OpenAI and sops credentials | regex + entropy (no rule for Anthropic OAuth tokens) | exact shape + checksum where the format has one, offline attribution, optional live check; for sops identities, the files they decrypt |
+| GitHub, Slack, AWS, Anthropic, OpenAI, registry and sops credentials | regex + entropy (no rule for Anthropic OAuth tokens, Docker configs, Docker Hub or Quay tokens) | exact shape + checksum where the format has one, offline attribution, optional live check; for sops identities, the files they decrypt |
 | Where it points | commit and file of each occurrence | oldest introducing commit, all refs that still contain it, and how orphaned commits went unreachable |
 | Scope | one repository or directory | any number of repositories, whole owners, with a disk budget |
-| Everything else | Stripe, SSH keys, ... | GitHub, Slack, AWS, Anthropic, OpenAI and sops credentials only |
+| Everything else | Stripe, SSH keys, ... | GitHub, Slack, AWS, Anthropic, OpenAI, registry and sops credentials only |
 
 Use both: gitleaks in CI on every push, patty when you want to know what is already out there.
 

@@ -2,6 +2,7 @@ package localcreds
 
 import (
 	"context"
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"strings"
@@ -82,10 +83,22 @@ func TestFind(t *testing.T) {
 	if err := os.WriteFile(".env", []byte("GITHUB_TOKEN="+hubTok+"\nSLACK_TOKEN="+slackTok+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// A Docker config: the quay.io login is compared by host and user, the
+	// entry that names a credential helper holds nothing to compare.
+	if err := os.MkdirAll(filepath.Join(home, ".docker"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	auth := base64.StdEncoding.EncodeToString([]byte("acme+ci:" + strings.Repeat("robot", 6)))
+	if err := os.WriteFile(filepath.Join(home, ".docker", "config.json"), []byte(`{"auths":{"quay.io":{"auth":"`+auth+`"},"ghcr.io":{}},"credHelpers":{"ghcr.io":"gh"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	got := Match(Find(context.Background(), providers.Default()))
-	if len(got) != 7 {
+	if len(got) != 8 {
 		t.Fatalf("Match = %v", got)
+	}
+	if src := got[detect.Fingerprint("quay.io/acme+ci")]; len(src) != 1 || src[0] != "~/.docker/config.json" {
+		t.Errorf("registry login sources = %v", src)
 	}
 	if src := got[detect.Fingerprint(fileID.String())]; len(src) != 1 || src[0] != "~/.config/sops/age/keys.txt ($SOPS_AGE_KEY_FILE)" {
 		t.Errorf("identity file sources = %v", src)
