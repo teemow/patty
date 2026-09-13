@@ -2,13 +2,17 @@ package localcreds
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/pem"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"filippo.io/age"
+	"golang.org/x/crypto/ssh"
 
 	"github.com/teemow/patty/internal/detect"
 	"github.com/teemow/patty/internal/detect/github"
@@ -219,5 +223,43 @@ func TestFindReadsEveryKubeconfigInTheList(t *testing.T) {
 	}
 	if src := got[detect.Fingerprint(home3)]; len(src) != 1 || src[0] != "~/.kube/config" {
 		t.Errorf("home kubeconfig sources = %v", src)
+	}
+}
+
+// TestFindCreditsVariablesByPosition covers a credential whose name is not
+// its value: a private key is named by its fingerprint, which appears in
+// no variable, so the variable it starts in gets the credit.
+func TestFindCreditsVariablesByPosition(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	for _, p := range providers.Default().Providers() {
+		src := p.LocalSources()
+		for _, name := range append(src.Env, src.EnvFiles...) {
+			t.Setenv(name, "")
+		}
+	}
+	t.Setenv("PATH", t.TempDir())
+	t.Chdir(t.TempDir())
+	_, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := ssh.MarshalPrivateKey(key, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSH_PRIVATE_KEY", string(pem.EncodeToMemory(block)))
+	t.Setenv("GH_TOKEN", token('p', "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"))
+	pub, err := ssh.NewPublicKey(key.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := Match(Find(context.Background(), providers.Default()))
+	if src := got[detect.Fingerprint(ssh.FingerprintSHA256(pub))]; len(src) != 1 || src[0] != "$SSH_PRIVATE_KEY" {
+		t.Fatalf("ssh key sources = %v (all: %v)", src, got)
+	}
+	if src := got[detect.Fingerprint(token('p', "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"))]; len(src) != 1 || src[0] != "$GH_TOKEN" {
+		t.Fatalf("token after a multi-line variable = %v", src)
 	}
 }

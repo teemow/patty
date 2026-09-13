@@ -243,8 +243,10 @@ func revokeAdvice(f scan.Finding, info detect.KindInfo) string {
 }
 
 // unlocksAdvice lists, per repository, how many files the credential opens
-// and the first few of them: "acme/infra: 42 files (a.yaml, b.yaml, c.yaml,
-// +39 more) · acme/app: 1 file (secrets.yaml)".
+// or that name it, and the first few of them: "acme/infra: 42 files
+// (a.yaml, b.yaml, c.yaml, +39 more) · acme/app: 1 file (secrets.yaml)". A
+// file that says more about the credential, the certificate a key belongs
+// to, has that after its path: "tls.crt: certificate for example.com, …".
 func unlocksAdvice(unlocks []scan.Unlock, none string) string {
 	if len(unlocks) == 0 {
 		return none
@@ -255,7 +257,11 @@ func unlocksAdvice(unlocks []scan.Unlock, none string) string {
 		if _, ok := byRepo[u.Repo]; !ok {
 			repos = append(repos, u.Repo)
 		}
-		byRepo[u.Repo] = append(byRepo[u.Repo], u.Path)
+		entry := u.Path
+		if u.Detail != "" {
+			entry += ": " + u.Detail
+		}
+		byRepo[u.Repo] = append(byRepo[u.Repo], entry)
 	}
 	parts := make([]string, 0, len(repos))
 	for _, repo := range repos {

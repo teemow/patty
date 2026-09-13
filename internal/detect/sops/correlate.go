@@ -25,7 +25,7 @@ const (
 // ENC[…] values or its sops metadata block. Anything else costs a few
 // substring searches and returns nil; the identity file itself, which
 // names its own public key in a comment, is not sops material.
-func (*Provider) Observe(content []byte) []string {
+func (*Provider) Observe(content []byte) []detect.Sighting {
 	if !sopsMaterial(content) {
 		return nil
 	}
@@ -34,7 +34,7 @@ func (*Provider) Observe(content []byte) []string {
 	if bytes.Contains(content, []byte("pgp")) {
 		ids = fingerprints(ids, content)
 	}
-	return ids
+	return detect.Sightings(ids)
 }
 
 // Identifiers implements detect.Correlator: the public key of an age

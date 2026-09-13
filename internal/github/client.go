@@ -35,8 +35,9 @@ func Token() string {
 
 // Client wraps the go-github client with the calls patty needs.
 type Client struct {
-	gh    *github.Client
-	login string
+	gh            *github.Client
+	login         string
+	authenticated bool
 }
 
 // NewClient returns a client; token may be empty for anonymous access.
@@ -49,7 +50,29 @@ func NewClient(token string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{gh: c}, nil
+	return &Client{gh: c, authenticated: token != ""}, nil
+}
+
+// Authenticated reports whether the client carries a token. Anonymous
+// access is limited to sixty requests an hour, so optional lookups are
+// skipped without one.
+func (c *Client) Authenticated() bool { return c.authenticated }
+
+// Contributors lists the logins of the repository's contributors, most
+// commits first, at most limit of them. Anonymous contributors, which the
+// API lists without a login, are left out.
+func (c *Client) Contributors(ctx context.Context, owner, name string, limit int) ([]string, error) {
+	contributors, _, err := c.gh.Repositories.ListContributors(ctx, owner, name, &github.ListContributorsOptions{ListOptions: github.ListOptions{PerPage: limit}})
+	if err != nil {
+		return nil, err
+	}
+	var logins []string
+	for _, contributor := range contributors {
+		if login := contributor.GetLogin(); login != "" {
+			logins = append(logins, login)
+		}
+	}
+	return logins, nil
 }
 
 // NewClientWithBaseURL is for tests against a fake API.

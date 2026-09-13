@@ -3,10 +3,13 @@
 package scan
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"path"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -52,6 +55,21 @@ type Rewrite struct {
 	Description string
 }
 
+// Remote is what the hosting service knows about a repository beyond its
+// objects: the commits its activity feed reports as rewritten, and the
+// logins of its contributors. A local repository has neither.
+type Remote struct {
+	Rewrites []Rewrite
+	// Contributors are GitHub logins, as the repository's contributors
+	// endpoint lists them; the scan adds the logins it reads from noreply
+	// author addresses itself.
+	Contributors []string
+}
+
+// maxLogins caps the logins looked up per repository, so a repository with
+// thousands of contributors costs at most that many public requests.
+const maxLogins = 50
+
 // Location is one place a token was found.
 type Location struct {
 	Repo       string          `json:"repo"`
@@ -83,6 +101,9 @@ type Finding struct {
 	// Attribution is what the credential's own shape says about its owner,
 	// such as the workspace id in a Slack token; known without --verify.
 	Attribution string `json:"attribution,omitempty"`
+	// Encrypted marks passphrase-protected material, useless without a
+	// passphrase that may or may not have leaked with it; see detect.Token.
+	Encrypted bool `json:"encrypted,omitempty"`
 	// Opaque marks secret material of no recognised shape, a plaintext
 	// Kubernetes Secret, which nothing can verify; see detect.KindInfo.
 	Opaque       bool                 `json:"opaque,omitempty"`
@@ -100,10 +121,15 @@ type Finding struct {
 	Occurrences int `json:"occurrences"`
 }
 
-// Unlock is one file a credential opens; see Finding.Unlocks.
+// Unlock is one file a credential opens or that names it; see
+// Finding.Unlocks.
 type Unlock struct {
 	Repo string `json:"repo"`
 	Path string `json:"path"`
+	// Detail is what the file says about the credential when the path
+	// alone does not: the names and expiry of the certificate a private
+	// key belongs to.
+	Detail string `json:"detail,omitempty"`
 }
 
 // Active reports whether the provider confirmed the credential as live.
@@ -153,8 +179,9 @@ type hit struct {
 }
 
 // Repo scans every blob, commit and tag object of the repository and
-// attributes findings. rewrites annotate commits fetched by SHA.
-func Repo(ctx context.Context, name string, repo *gitrepo.Repo, rewrites []Rewrite, opts Options) (Result, error) {
+// attributes findings. remote annotates commits fetched by SHA and names
+// the repository's contributors.
+func Repo(ctx context.Context, name string, repo *gitrepo.Repo, remote Remote, opts Options) (Result, error) {
 	start := time.Now()
 	res := Result{Target: name}
 
@@ -183,25 +210,32 @@ func Repo(ctx context.Context, name string, repo *gitrepo.Repo, rewrites []Rewri
 	}
 
 	var (
-		mu          sync.Mutex
-		bytes       int64
-		findings    = map[string]*Finding{}
-		hits        = map[string]map[hit]bool{} // token value -> distinct locations
-		registry    = opts.providers()
-		correlators = registry.Correlators()
-		sightings   = map[string][]string{} // blob -> identifiers it names, per correlators
+		mu        sync.Mutex
+		bytes     int64
+		findings  = map[string]*Finding{}
+		hits      = map[string]map[hit]bool{} // token value -> distinct locations
+		registry  = opts.providers()
+		sightings = map[string][]detect.Sighting{} // blob -> identifiers it names, per correlators
+		logins    = map[string]bool{}              // GitHub logins read from noreply author addresses
 	)
 	err = parallel(ctx, shas, opts.workers(), func(shard []string) error {
 		var local int64
 		err := repo.ReadObjects(ctx, shard, func(obj gitrepo.Object, content []byte) error {
 			local += obj.Size
-			if obj.Type == "blob" {
-				for _, c := range correlators {
-					if ids := c.Observe(content); len(ids) > 0 {
-						mu.Lock()
-						sightings[obj.SHA] = append(sightings[obj.SHA], ids...)
-						mu.Unlock()
+			switch obj.Type {
+			case "blob":
+				if seen := registry.Observe(content); len(seen) > 0 {
+					mu.Lock()
+					sightings[obj.SHA] = append(sightings[obj.SHA], seen...)
+					mu.Unlock()
+				}
+			case "commit":
+				if found := noreplyLogins(content); len(found) > 0 {
+					mu.Lock()
+					for _, l := range found {
+						logins[l] = true
 					}
+					mu.Unlock()
 				}
 			}
 			for _, tok := range registry.Find(content) {
@@ -235,11 +269,16 @@ func Repo(ctx context.Context, name string, repo *gitrepo.Repo, rewrites []Rewri
 	res.Stats.Bytes = bytes
 
 	if len(findings) > 0 {
-		paths, err := attribute(ctx, name, repo, commits, rewrites, findings, hits, &res.Stats)
+		paths, err := attribute(ctx, name, repo, commits, remote.Rewrites, findings, hits, &res.Stats)
 		if err != nil {
 			return res, err
 		}
-		correlate(name, registry, findings, sightings, paths)
+		correlate(ctx, name, registry, findings, sightings, paths, committers(logins, remote.Contributors))
+		for value, f := range findings {
+			if opts.Ignore[string(f.Kind)] {
+				delete(findings, value)
+			}
+		}
 	}
 	for _, f := range findings {
 		if opts.Verify {
@@ -268,6 +307,7 @@ func NewFinding(registry *detect.Registry, tok detect.Token) *Finding {
 		Redacted:         redacted,
 		ChecksumVerified: tok.ChecksumVerified,
 		Attribution:      tok.Attribution,
+		Encrypted:        tok.Encrypted,
 		Opaque:           registry.Info(tok.Kind).Opaque,
 		Secret:           tok.Secret,
 	}
@@ -290,11 +330,15 @@ func (f *Finding) complete(secret, attribution string) {
 
 // SortFindings orders active credentials first, then the ones nothing has
 // rejected, then opaque material nothing can verify, then the rejected
-// ones; within a group by kind and fingerprint.
+// ones; within a group material that is usable as it is before
+// passphrase-protected material, then by kind and fingerprint.
 func SortFindings(fs []Finding) {
 	sort.Slice(fs, func(i, j int) bool {
 		if a, b := rank(fs[i]), rank(fs[j]); a != b {
 			return a < b
+		}
+		if fs[i].Encrypted != fs[j].Encrypted {
+			return !fs[i].Encrypted
 		}
 		if fs[i].Kind != fs[j].Kind {
 			return fs[i].Kind < fs[j].Kind
@@ -320,41 +364,190 @@ func rank(f Finding) int {
 
 // correlate lists on every finding of a correlating provider the files of
 // this repository that name the credential: the sops files encrypted to an
-// identity's recipient. Every version of a file counts once; a blob no
-// commit reaches has no path and is left out.
-func correlate(repo string, registry *detect.Registry, findings map[string]*Finding, sightings map[string][]string, paths map[string]string) {
-	if len(sightings) == 0 {
+// identity's recipient, the authorized_keys that lists a key's public half,
+// the certificate a TLS key belongs to. Every version of a file counts
+// once; a blob no commit reaches has no path and is left out. A credential
+// that says nothing about its public half adopts what the files next to it
+// say; one whose public half a committer publishes on GitHub is attributed
+// to that login; and a provider that tells its kinds apart by such context
+// gets to reclassify the finding.
+func correlate(ctx context.Context, repo string, registry *detect.Registry, findings map[string]*Finding, sightings map[string][]detect.Sighting, paths map[string]string, logins []string) {
+	if len(sightings) == 0 && len(logins) == 0 {
 		return
 	}
-	pathsOf := map[string]map[string]bool{} // identifier -> paths naming it
-	for sha, ids := range sightings {
-		path := paths[sha]
-		if path == "" {
+	type sightingAt struct {
+		path string
+		detect.Sighting
+	}
+	var (
+		pathsOf = map[string]map[string]string{} // identifier -> path -> detail
+		byDir   = map[string][]sightingAt{}      // directory -> sightings in it
+		matches = map[detect.CommitterCorrelator]map[string]string{}
+	)
+	for sha, seen := range sightings {
+		p := paths[sha]
+		if p == "" {
 			continue
 		}
-		for _, id := range ids {
-			if pathsOf[id] == nil {
-				pathsOf[id] = map[string]bool{}
+		for _, s := range seen {
+			if pathsOf[s.ID] == nil {
+				pathsOf[s.ID] = map[string]string{}
 			}
-			pathsOf[id][path] = true
+			if pathsOf[s.ID][p] == "" {
+				pathsOf[s.ID][p] = s.Detail
+			}
+			byDir[path.Dir(p)] = append(byDir[path.Dir(p)], sightingAt{p, s})
 		}
 	}
 	for _, f := range findings {
-		c, ok := registry.Provider(f.Kind).(detect.Correlator)
+		provider := registry.Provider(f.Kind)
+		c, ok := provider.(detect.Correlator)
 		if !ok {
 			continue
 		}
+		tok := f.Detected()
+		ids := c.Identifiers(tok)
+		if near, ok := provider.(detect.ProximityCorrelator); ok {
+			for _, dir := range f.dirs() {
+				for _, s := range byDir[dir] {
+					ids = appendUnique(ids, near.Adjacent(f.Kind, s.Sighting)...)
+				}
+			}
+		}
+		var matched []string
+		if cc, ok := provider.(detect.CommitterCorrelator); ok && len(logins) > 0 {
+			if matches[cc] == nil {
+				matches[cc] = cc.Committers(ctx, logins)
+			}
+			for _, id := range ids {
+				if m := matches[cc][id]; m != "" {
+					matched = appendUnique(matched, id)
+					f.Attribution = joinAttribution(f.Attribution, m)
+				}
+			}
+		}
 		seen := map[string]bool{}
-		for _, id := range c.Identifiers(f.Detected()) {
-			for path := range pathsOf[id] {
-				if !seen[path] {
-					seen[path] = true
-					f.Unlocks = append(f.Unlocks, Unlock{Repo: repo, Path: path})
+		for _, id := range ids {
+			if len(pathsOf[id]) > 0 {
+				matched = appendUnique(matched, id)
+			}
+			for p, detail := range pathsOf[id] {
+				if !seen[p] {
+					seen[p] = true
+					f.Unlocks = append(f.Unlocks, Unlock{Repo: repo, Path: p, Detail: detail})
 				}
 			}
 		}
 		sort.Slice(f.Unlocks, func(i, j int) bool { return f.Unlocks[i].Path < f.Unlocks[j].Path })
+		if pc, ok := provider.(detect.PathClassifier); ok {
+			if kind := pc.Classify(tok, f.paths(), matched); kind != "" && kind != f.Kind && registry.Provider(kind) == provider {
+				f.Kind = kind
+			}
+		}
 	}
+}
+
+// paths lists the distinct paths a finding was found under, sorted.
+func (f Finding) paths() []string {
+	var out []string
+	for _, l := range f.Locations {
+		if l.Path != "" {
+			out = appendUnique(out, l.Path)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// dirs lists the distinct directories a finding was found in.
+func (f Finding) dirs() []string {
+	var out []string
+	for _, p := range f.paths() {
+		out = appendUnique(out, path.Dir(p))
+	}
+	return out
+}
+
+func appendUnique(list []string, items ...string) []string {
+	for _, item := range items {
+		found := false
+		for _, have := range list {
+			if have == item {
+				found = true
+				break
+			}
+		}
+		if !found {
+			list = append(list, item)
+		}
+	}
+	return list
+}
+
+func joinAttribution(attribution, more string) string {
+	if attribution == "" {
+		return more
+	}
+	if strings.Contains(attribution, more) {
+		return attribution
+	}
+	return attribution + "; " + more
+}
+
+// committers merges the logins read from commits with the contributors
+// the hosting service lists, the former first, each once, at most
+// maxLogins of them, in a stable order.
+func committers(fromCommits map[string]bool, contributors []string) []string {
+	var out []string
+	for l := range fromCommits {
+		out = append(out, l)
+	}
+	sort.Strings(out)
+	for _, l := range contributors {
+		if l != "" && !fromCommits[l] {
+			out = appendUnique(out, l)
+		}
+	}
+	if len(out) > maxLogins {
+		out = out[:maxLogins]
+	}
+	return out
+}
+
+// noreplyHost is the domain of the addresses GitHub gives users who keep
+// their email private; the local part is `id+login` or, for accounts
+// older than 2017, the bare login.
+const noreplyHost = "@users.noreply.github.com"
+
+// noreplyLogins reads the GitHub logins out of a commit object's author
+// and committer lines, which is the one place a repository names them
+// without asking GitHub.
+func noreplyLogins(commit []byte) []string {
+	var out []string
+	for line := range bytes.Lines(commit) {
+		if len(line) == 0 || line[0] == '\n' {
+			break // end of the header
+		}
+		if !bytes.HasPrefix(line, []byte("author ")) && !bytes.HasPrefix(line, []byte("committer ")) {
+			continue
+		}
+		open, closing := bytes.IndexByte(line, '<'), bytes.IndexByte(line, '>')
+		if open < 0 || closing < open {
+			continue
+		}
+		email := string(line[open+1 : closing])
+		local, ok := strings.CutSuffix(email, noreplyHost)
+		if !ok {
+			continue
+		}
+		if _, login, found := strings.Cut(local, "+"); found {
+			local = login
+		}
+		if local != "" {
+			out = appendUnique(out, local)
+		}
+	}
+	return out
 }
 
 // attribute resolves paths, introducing commits and refs for every hit. It

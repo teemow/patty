@@ -38,6 +38,11 @@ type Token struct {
 	// contacting the provider: a team id in a Slack token, for example. Empty
 	// when the format carries nothing of the sort.
 	Attribution string
+	// Encrypted reports that the material is passphrase-protected and so
+	// useless to whoever found it unless the passphrase leaked with it: an
+	// encrypted private key. The report lists such findings after the ones
+	// that are usable as they are.
+	Encrypted bool
 	// Secret is the material a credential needs besides Value when it is made
 	// of several strings: the secret access key found next to an AWS key id,
 	// and the session token of a temporary one. Its layout is the provider's

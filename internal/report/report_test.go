@@ -318,7 +318,7 @@ func TestTextShowsWhatAnIdentityDecrypts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := scan.Repo(context.Background(), "acme/infra", repo, nil, scan.Options{Workers: 1, Verify: true})
+	res, err := scan.Repo(context.Background(), "acme/infra", repo, scan.Remote{}, scan.Options{Workers: 1, Verify: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -345,5 +345,16 @@ func TestTextShowsWhatAnIdentityDecrypts(t *testing.T) {
 	}
 	if strings.Contains(out, "public.sops.yaml") || strings.Contains(out, "shape match") {
 		t.Fatalf("a file encrypted to someone else is not listed, and the checksum was verified:\n%s", out)
+	}
+}
+
+func TestUnlocksAdviceShowsDetails(t *testing.T) {
+	unlocks := []scan.Unlock{
+		{Repo: "acme/infra", Path: "tls/server.crt", Detail: "certificate for www.example.com, expires 2030-06-01, issuer Example CA"},
+		{Repo: "acme/infra", Path: "authorized_keys"},
+	}
+	want := "acme/infra: 2 files (tls/server.crt: certificate for www.example.com, expires 2030-06-01, issuer Example CA, authorized_keys)"
+	if got := unlocksAdvice(unlocks, "none"); got != want {
+		t.Fatalf("got %q\nwant %q", got, want)
 	}
 }
