@@ -90,7 +90,7 @@ func runOne(ctx context.Context, t source.Target, opts RunOptions) Result {
 			return Result{Target: t.Display, Err: err}
 		}
 		progress("scanning")
-		return finish(ctx, t.Display, repo, nil, opts.Options)
+		return finish(ctx, t.Display, repo, Remote{}, opts.Options)
 	}
 
 	estimate := int64(float64(t.Repo.SizeKB)*1024*sizeSlack) + disk.MiB
@@ -151,8 +151,14 @@ func runOne(ctx context.Context, t source.Target, opts RunOptions) Result {
 		}
 	}
 
+	remote := Remote{Rewrites: rewrites}
+	if opts.GitHub != nil && opts.GitHub.Authenticated() {
+		if remote.Contributors, err = opts.GitHub.Contributors(ctx, t.Repo.Owner, t.Repo.Name, maxLogins); err != nil {
+			notes = append(notes, "contributors unavailable: "+err.Error())
+		}
+	}
 	progress("scanning")
-	res := finish(ctx, t.Display, repo, rewrites, opts.Options)
+	res := finish(ctx, t.Display, repo, remote, opts.Options)
 	res.Stats.Rewrites = fetched
 	res.Stats.Unavailable = lost
 	res.Stats.Disk = repo.DiskUsage()
@@ -160,8 +166,8 @@ func runOne(ctx context.Context, t source.Target, opts RunOptions) Result {
 	return res
 }
 
-func finish(ctx context.Context, name string, repo *gitrepo.Repo, rewrites []Rewrite, opts Options) Result {
-	res, err := Repo(ctx, name, repo, rewrites, opts)
+func finish(ctx context.Context, name string, repo *gitrepo.Repo, remote Remote, opts Options) Result {
+	res, err := Repo(ctx, name, repo, remote, opts)
 	if err != nil {
 		res.Err = err
 		return res

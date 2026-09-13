@@ -90,7 +90,7 @@ func TestRepoFindsOrphanedFileAndMessageTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	rewrites := []Rewrite{{SHA: orphanCommit, Description: "force-pushed away from main on 2026-09-10"}}
-	res, err := Repo(ctx, "fixture", repo, rewrites, Options{Workers: 2, MaxObject: 2048})
+	res, err := Repo(ctx, "fixture", repo, Remote{Rewrites: rewrites}, Options{Workers: 2, MaxObject: 2048})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestRepoFindsOrphanedFileAndMessageTokens(t *testing.T) {
 	}
 
 	// Ignoring by fingerprint drops the finding entirely.
-	res, err = Repo(ctx, "fixture", repo, nil, Options{Workers: 1, Ignore: map[string]bool{kept.Fingerprint: true}})
+	res, err = Repo(ctx, "fixture", repo, Remote{}, Options{Workers: 1, Ignore: map[string]bool{kept.Fingerprint: true}})
 	if err != nil || len(res.Findings) != 4 { // no size limit: the large object's token appears, the ignored one disappears
 		t.Fatalf("ignore: %d findings, %v", len(res.Findings), err)
 	}
@@ -167,7 +167,7 @@ func TestRepoCompletesKeyPairAcrossObjects(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, workers := range []int{1, 4} {
-		res, err := Repo(ctx, "fixture", repo, nil, Options{Workers: workers})
+		res, err := Repo(ctx, "fixture", repo, Remote{}, Options{Workers: workers})
 		if err != nil || len(res.Findings) != 1 {
 			t.Fatalf("workers=%d: %d findings, %v", workers, len(res.Findings), err)
 		}
@@ -194,7 +194,7 @@ func TestRepoReportsOneLoginPerRegistryHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := Repo(ctx, "fixture", repo, nil, Options{})
+	res, err := Repo(ctx, "fixture", repo, Remote{}, Options{})
 	if err != nil || len(res.Findings) != 2 {
 		t.Fatalf("%d findings, %v: %+v", len(res.Findings), err, res.Findings)
 	}
@@ -303,7 +303,7 @@ func TestRepoCorrelatesIdentitiesWithSopsRecipients(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, workers := range []int{1, 4} {
-		res, err := Repo(ctx, "fixture", repo, nil, Options{Workers: workers, Verify: true})
+		res, err := Repo(ctx, "fixture", repo, Remote{}, Options{Workers: workers, Verify: true})
 		if err != nil || len(res.Findings) != 1 {
 			t.Fatalf("workers=%d: %d findings, %v", workers, len(res.Findings), err)
 		}

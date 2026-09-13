@@ -43,11 +43,71 @@ type Correlator interface {
 	// of this provider (the recipients an encrypted file lists), or nil when
 	// the object is of no interest. It runs on every scanned object and has
 	// to be cheap; it must not keep a reference to content.
-	Observe(content []byte) []string
+	Observe(content []byte) []Sighting
 	// Identifiers returns what the credential is known as in such content:
 	// the public key of an identity. The scan matches them against what
 	// Observe reported.
 	Identifiers(tok Token) []string
+}
+
+// Sighting is one identifier a Correlator saw in scanned content, and what
+// the content says about it when the identifier alone does not: the names
+// and expiry of the certificate a public key belongs to.
+type Sighting struct {
+	ID string
+	// Detail is shown next to the file that names the credential; empty
+	// when the file itself says enough (a sops recipient list).
+	Detail string
+}
+
+// Sightings wraps bare identifiers, for a Correlator whose sightings need
+// no detail.
+func Sightings(ids []string) []Sighting {
+	if len(ids) == 0 {
+		return nil
+	}
+	out := make([]Sighting, len(ids))
+	for i, id := range ids {
+		out[i] = Sighting{ID: id}
+	}
+	return out
+}
+
+// CommitterCorrelator is a Correlator that also relates its credentials to
+// the people who committed to a scanned repository, through what the
+// hosting service publishes about them: the SSH keys of a GitHub account.
+type CommitterCorrelator interface {
+	Correlator
+	// Committers is handed the distinct GitHub logins of a repository's
+	// authors and contributors and returns, per identifier (in the form
+	// Identifiers reports them), what a match means: "matches octocat's
+	// GitHub SSH key". It may fetch public data and is called once per
+	// repository, after the scan, only when the repository holds a
+	// credential of this provider.
+	Committers(ctx context.Context, logins []string) map[string]string
+}
+
+// ProximityCorrelator is a Correlator with credentials that say nothing
+// about their public half, an encrypted cosign key, so they are related
+// to the sightings in the directory they were found in instead: the
+// cosign.pub next to cosign.key.
+type ProximityCorrelator interface {
+	Correlator
+	// Adjacent returns the identifiers a credential of this kind adopts
+	// from a sighting found in the same directory, or nil when the
+	// sighting is not one it should.
+	Adjacent(kind Kind, s Sighting) []string
+}
+
+// PathClassifier is a Provider whose kinds are told apart by where a
+// credential lives and what names it rather than by its shape alone: a
+// PEM private key is an SSH key in id_rsa or when an authorized_keys file
+// lists its public key, and a TLS key in server.key.
+type PathClassifier interface {
+	// Classify returns the kind for a credential found under paths and
+	// matched by the identifiers in matched, or "" to keep the kind Find
+	// gave it. The scan applies it after attribution and correlation.
+	Classify(tok Token, paths []string, matched []string) Kind
 }
 
 // Configurable is a Provider that takes operator configuration from the
@@ -258,6 +318,33 @@ func (r *Registry) Correlators() []Correlator {
 		}
 	}
 	return out
+}
+
+// Observe shows content to every correlating provider and returns what
+// they saw. The decoded values of the Kubernetes Secret manifests in
+// content are shown too, so a certificate committed as the tls.crt of a
+// Secret names the key it belongs to like one committed as a file.
+func (r *Registry) Observe(content []byte) []Sighting {
+	correlators := r.Correlators()
+	if len(correlators) == 0 {
+		return nil
+	}
+	var seen []Sighting
+	observe := func(b []byte) {
+		for _, c := range correlators {
+			seen = append(seen, c.Observe(b)...)
+		}
+	}
+	observe(content)
+	for _, s := range Secrets(content) {
+		if s.Sops {
+			continue
+		}
+		for _, v := range s.Plaintext() {
+			observe(v.Value)
+		}
+	}
+	return seen
 }
 
 // Provider returns the provider that issues credentials of this kind, or nil.

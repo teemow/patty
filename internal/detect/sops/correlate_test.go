@@ -14,7 +14,7 @@ func TestObserveSopsRules(t *testing.T) {
 	fp := Fingerprint(key.PrimaryKey)
 	rules := "creation_rules:\n  - path_regex: clusters/prod/.*\n    age: >-\n      " + a + ",\n      " + b + "\n    pgp: " + strings.ToLower(fp) + "\n  - age: " + a + "\n"
 	got := New().Observe([]byte(rules))
-	if want := []string{a, b, fp}; !reflect.DeepEqual(got, want) {
+	if want := detect.Sightings([]string{a, b, fp}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Observe(.sops.yaml) = %v, want %v", got, want)
 	}
 }
@@ -24,17 +24,17 @@ func TestObserveEncryptedFiles(t *testing.T) {
 	_, key := pgpKey(t, "E", "e@dmv.springfield", "")
 	fp := Fingerprint(key.PrimaryKey)
 	yaml := "password: ENC[AES256_GCM,data:abc,iv:def,tag:ghi,type:str]\nsops:\n    age:\n        - recipient: " + r + "\n          enc: irrelevant\n    pgp:\n        - created_at: \"2026-01-01T00:00:00Z\"\n          fp: " + fp + "\n    version: 3.9.0\n"
-	if got := New().Observe([]byte(yaml)); !reflect.DeepEqual(got, []string{r, fp}) {
+	if got := New().Observe([]byte(yaml)); !reflect.DeepEqual(got, detect.Sightings([]string{r, fp})) {
 		t.Fatalf("Observe(yaml) = %v", got)
 	}
 	// JSON puts quotes between "sops" and the colon; the ENC[ marker still applies.
 	js := `{"password": "ENC[AES256_GCM,data:abc,iv:def,tag:ghi,type:str]", "sops": {"age": [{"recipient": "` + r + `"}]}}`
-	if got := New().Observe([]byte(js)); !reflect.DeepEqual(got, []string{r}) {
+	if got := New().Observe([]byte(js)); !reflect.DeepEqual(got, detect.Sightings([]string{r})) {
 		t.Fatalf("Observe(json) = %v", got)
 	}
 	// A metadata block without encrypted values (sops --extract, or a stub).
 	meta := "sops:\n  age:\n  - recipient: " + r + "\n"
-	if got := New().Observe([]byte(meta)); !reflect.DeepEqual(got, []string{r}) {
+	if got := New().Observe([]byte(meta)); !reflect.DeepEqual(got, detect.Sightings([]string{r})) {
 		t.Fatalf("Observe(metadata) = %v", got)
 	}
 }
@@ -64,7 +64,7 @@ func TestObserveChecksRecipientsAndBoundaries(t *testing.T) {
 	}
 	// A fingerprint is only looked for when the file mentions pgp at all.
 	content = "creation_rules:\n- age: " + r + "\n- key: " + strings.Repeat("D", 40) + "\n"
-	if got := New().Observe([]byte(content)); !reflect.DeepEqual(got, []string{r}) {
+	if got := New().Observe([]byte(content)); !reflect.DeepEqual(got, detect.Sightings([]string{r})) {
 		t.Fatalf("hex without pgp context, got %v", got)
 	}
 }

@@ -57,11 +57,10 @@ func Find(ctx context.Context, registry *detect.Registry) []Credential {
 	for _, p := range registry.Providers() {
 		sources = append(sources, p.LocalSources())
 	}
-	for _, tok := range registry.Find(environment(sources)) {
-		for _, name := range envNames(sources) {
-			if v := os.Getenv(name); v != "" && strings.Contains(v, tok.Value) {
-				record(tok.Fingerprint(), "$"+name)
-			}
+	env, spans := environment(sources)
+	for _, tok := range registry.Find(env) {
+		if name := spans.at(tok.Offset); name != "" {
+			record(tok.Fingerprint(), "$"+name)
 		}
 	}
 	for _, c := range candidateFiles(sources) {
@@ -82,15 +81,40 @@ func Find(ctx context.Context, registry *detect.Registry) []Credential {
 }
 
 // environment renders the providers' environment variables as one
-// NAME=value document, in the order the providers list them.
-func environment(sources []detect.LocalSources) []byte {
-	var b strings.Builder
+// NAME=value document, in the order the providers list them, and says
+// which variable each byte of it belongs to. A credential is credited to
+// the variable it starts in, whatever its value looks like: a private key
+// is named by its fingerprint, which appears in no variable.
+func environment(sources []detect.LocalSources) ([]byte, envSpans) {
+	var (
+		b     strings.Builder
+		spans envSpans
+	)
 	for _, name := range envNames(sources) {
 		if v := os.Getenv(name); v != "" {
+			start := b.Len()
 			b.WriteString(name + "=" + v + "\n")
+			spans = append(spans, envSpan{name, start, b.Len()})
 		}
 	}
-	return []byte(b.String())
+	return []byte(b.String()), spans
+}
+
+type envSpan struct {
+	name       string
+	start, end int
+}
+
+type envSpans []envSpan
+
+// at names the variable whose line holds the byte at offset, or "".
+func (s envSpans) at(offset int) string {
+	for _, span := range s {
+		if offset >= span.start && offset < span.end {
+			return span.name
+		}
+	}
+	return ""
 }
 
 func envNames(sources []detect.LocalSources) []string {

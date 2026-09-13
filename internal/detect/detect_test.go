@@ -28,9 +28,9 @@ func (fake) LocalSources() LocalSources            { return LocalSources{} }
 // correlating is a fake that also relates its credentials to content.
 type correlating struct{ fake }
 
-func (c correlating) Observe(content []byte) []string {
+func (c correlating) Observe(content []byte) []Sighting {
 	if strings.Contains(string(content), "encrypted to "+c.name) {
-		return []string{c.name + "-public"}
+		return Sightings([]string{c.name + "-public"})
 	}
 	return nil
 }

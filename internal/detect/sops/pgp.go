@@ -58,7 +58,7 @@ func pgpKeys(block []byte, offset int) []detect.Token {
 			continue
 		}
 		fp := Fingerprint(e.PrimaryKey)
-		out = append(out, detect.Token{Kind: KindPGP, Value: fp, Offset: offset, ChecksumVerified: true, Attribution: describe(e, fp)})
+		out = append(out, detect.Token{Kind: KindPGP, Value: fp, Offset: offset, ChecksumVerified: true, Attribution: describe(e, fp), Encrypted: protected(e)})
 	}
 	return out
 }
