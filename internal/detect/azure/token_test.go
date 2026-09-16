@@ -1,7 +1,10 @@
 package azure
 
 import (
+	"crypto/sha512"
 	"encoding/base64"
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -265,5 +268,86 @@ func TestPrincipalEncoding(t *testing.T) {
 	tok := detect.Token{Secret: principal{Tenant: tenant}.encode()}
 	if decodePrincipal(tok).Tenant != tenant {
 		t.Error("round trip lost the tenant")
+	}
+}
+
+// finishes runs fn and fails the test when it has not returned within the
+// limit: a scan that never returns is worse than a wrong answer.
+func finishes(t *testing.T, limit time.Duration, fn func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fn()
+	}()
+	select {
+	case <-done:
+	case <-time.After(limit):
+		t.Fatalf("did not finish within %v", limit)
+	}
+}
+
+// lockfile builds content shaped like a yarn.lock: n integrity hashes of
+// 86 base64 characters and `==`, which is exactly the shape of a storage
+// account key.
+func lockfile(n int) string {
+	var b strings.Builder
+	for i := range n {
+		sum := sha512.Sum512([]byte(strconv.Itoa(i)))
+		fmt.Fprintf(&b, "\"pkg-%d@^1.0.0\":\n  version \"1.0.%d\"\n  integrity sha512-%s\n\n", i, i, base64.StdEncoding.EncodeToString(sum[:]))
+	}
+	return b.String()
+}
+
+func TestFindStorageKeyAmongHashes(t *testing.T) {
+	// Every hash is a key candidate that has to be paired with an account
+	// name; scanning the whole file again for each took seconds per
+	// megabyte. The names are gathered once, and a lockfile names none.
+	content := []byte(lockfile(20000))
+	var found []detect.Token
+	finishes(t, 10*time.Second, func() { found = find(content) })
+	if len(found) != 0 {
+		t.Errorf("found %d tokens in a lockfile, want none", len(found))
+	}
+}
+
+func TestFindSASInMinifiedScript(t *testing.T) {
+	// A parameter name written as a property (`e.sig=`) has no separator
+	// in front of it and stands once in its span; the search for the start
+	// of a bare token used to loop on it forever.
+	for name, content := range map[string]string{
+		"property":     "var e={};e.sig=t,e.sp=r,e.se=n;",
+		"only sig":     "x.sig=1",
+		"sig at start": "sig=1",
+	} {
+		var found []detect.Token
+		finishes(t, 10*time.Second, func() { found = find([]byte(content)) })
+		if len(found) != 0 {
+			t.Errorf("%s: found %+v", name, found)
+		}
+	}
+}
+
+func TestQueryStart(t *testing.T) {
+	for raw, want := range map[string]int{
+		"sv=1&se=2&sig=3":       0,
+		"TOKEN=sv=1&se=2&sig=3": 6,
+		"?sv=1&sig=3":           1,
+		"e.sig=t":               0,
+		"x.sp=1&sig=y":          7,
+		"nothing here":          0,
+	} {
+		if got := queryStart(raw); got != want {
+			t.Errorf("queryStart(%q) = %d, want %d", raw, got, want)
+		}
+	}
+}
+
+func BenchmarkFindLockfile(b *testing.B) {
+	content := []byte(lockfile(10000))
+	b.SetBytes(int64(len(content)))
+	b.ReportAllocs()
+	for b.Loop() {
+		find(content)
 	}
 }

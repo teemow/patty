@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/teemow/patty/internal/detect"
@@ -96,17 +97,18 @@ func (p principal) attribution() string {
 // with what it needs from the same object.
 func (p *Provider) Find(content []byte) []detect.Token {
 	var found []detect.Token
-	var lower []byte // content in lower case, built once a pairing needs it
-	lowered := func() []byte {
-		if lower == nil {
-			lower = bytes.ToLower(content)
-		}
-		return lower
-	}
+	// What a pairing needs from the whole object is built once, the first
+	// time a candidate asks for it: a lockfile holds thousands of hashes
+	// shaped exactly like a storage key, and scanning the object again for
+	// every one of them made the scan quadratic.
+	lower := sync.OnceValue(func() []byte { return bytes.ToLower(content) })
+	tenants := sync.OnceValue(func() []int { return guidsAfter(content, lower(), tenantKeywords) })
+	clients := sync.OnceValue(func() []int { return guidsAfter(content, lower(), clientKeywords) })
+	named := sync.OnceValue(func() []accountAt { return accounts(content, lower()) })
 	found = detect.ScanPrefix(found, content, secretAnchor, func(start int) (detect.Token, bool) {
 		tok, ok := clientSecretAt(content, start)
 		if ok {
-			pr := principal{Tenant: guidNear(content, lowered(), tenantKeywords, tok.Offset), Client: guidNear(content, lowered(), clientKeywords, tok.Offset)}
+			pr := principal{Tenant: guidNear(content, tenants(), tok.Offset), Client: guidNear(content, clients(), tok.Offset)}
 			tok.Secret, tok.Attribution = pr.encode(), pr.attribution()
 		}
 		return tok, ok
@@ -116,7 +118,7 @@ func (p *Provider) Find(content []byte) []detect.Token {
 		if !ok {
 			return tok, false
 		}
-		account := accountNear(content, lowered(), tok.Offset, tok.Offset+len(tok.Value))
+		account := accountNear(content, lower(), named(), tok.Offset, tok.Offset+len(tok.Value))
 		if account == "" {
 			return detect.Token{}, false
 		}
@@ -167,24 +169,30 @@ func storageKeyAt(content []byte, padding int) (detect.Token, bool) {
 	return detect.Token{Kind: KindStorageAccountKey, Value: string(content[start:end]), Offset: start}, true
 }
 
-// guidNear finds the GUID that stands within guidWindow bytes after the
-// occurrence of one of the keywords closest to the credential at from; ""
-// when there is none. Keywords are matched in lower case, the GUID is
-// returned as written.
-func guidNear(content, lower []byte, keywords []string, from int) string {
+// guidNear picks, among the GUIDs that stand behind a keyword, the one
+// closest to the credential at from; "" when there is none.
+func guidNear(content []byte, guids []int, from int) string {
 	best, bestDist := "", -1
-	for _, kw := range keywords {
-		for at := range occurrences(lower, kw) {
-			guid, ok := guidAfter(content, at+len(kw), guidWindow)
-			if !ok {
-				continue
-			}
-			if dist := distance(guid, guid+guidLen, from, from); bestDist < 0 || dist < bestDist {
-				best, bestDist = string(content[guid:guid+guidLen]), dist
-			}
+	for _, guid := range guids {
+		if dist := distance(guid, guid+guidLen, from, from); bestDist < 0 || dist < bestDist {
+			best, bestDist = string(content[guid:guid+guidLen]), dist
 		}
 	}
 	return best
+}
+
+// guidsAfter finds every GUID that stands within guidWindow bytes after an
+// occurrence of one of the keywords. Keywords are matched in lower case.
+func guidsAfter(content, lower []byte, keywords []string) []int {
+	var out []int
+	for _, kw := range keywords {
+		for at := range occurrences(lower, kw) {
+			if guid, ok := guidAfter(content, at+len(kw), guidWindow); ok {
+				out = append(out, guid)
+			}
+		}
+	}
+	return out
 }
 
 // occurrences yields the offset of every occurrence of needle in content.
@@ -245,11 +253,40 @@ func guidAt(content []byte, i int) bool {
 	return true
 }
 
+// accountAt is a storage account name written in the scanned content, and
+// where it starts.
+type accountAt struct {
+	name string
+	at   int
+}
+
+// accounts lists every storage account name the content writes down: the
+// first label of a storage endpoint host, and the name written after one
+// of the account keywords.
+func accounts(content, lower []byte) []accountAt {
+	var out []accountAt
+	for _, host := range storageHosts {
+		for at := range occurrences(lower, host) {
+			if name := labelBefore(content, at); name != "" {
+				out = append(out, accountAt{name, at - len(name)})
+			}
+		}
+	}
+	for _, kw := range accountKeywords {
+		for at := range occurrences(lower, kw) {
+			if name, at := accountNameAfter(content, at+len(kw)); name != "" {
+				out = append(out, accountAt{name, at})
+			}
+		}
+	}
+	return out
+}
+
 // accountNear finds the storage account a key belongs to: the AccountName
-// of the connection string the key stands in, the first label of a storage
-// endpoint host, or the name written after one of the account keywords,
-// whichever is closest to the key. "" when there is none.
-func accountNear(content, lower []byte, start, end int) string {
+// of the connection string the key stands in, or the one of the accounts
+// named anywhere in the content that is closest to the key. "" when there
+// is none.
+func accountNear(content, lower []byte, named []accountAt, start, end int) string {
 	best, bestDist := "", -1
 	consider := func(name string, at int) {
 		if dist := distance(at, at+len(name), start, end); name != "" && (bestDist < 0 || dist < bestDist) {
@@ -269,17 +306,8 @@ func accountNear(content, lower []byte, start, end int) string {
 			consider(accountNameAt(content, at), at)
 		}
 	}
-	for _, host := range storageHosts {
-		for at := range occurrences(lower, host) {
-			name := labelBefore(content, at)
-			consider(name, at-len(name))
-		}
-	}
-	for _, kw := range accountKeywords {
-		for at := range occurrences(lower, kw) {
-			name, at := accountNameAfter(content, at+len(kw))
-			consider(name, at)
-		}
+	for _, a := range named {
+		consider(a.name, a.at)
 	}
 	return best
 }
@@ -393,15 +421,22 @@ func parseSignature(raw string) (signature, bool) {
 
 // queryStart finds where the SAS parameters begin in a bare token: the
 // first parameter name that stands at the start or right behind a
-// separator.
+// separator. A name without a separator in front of it, a property such
+// as `e.sig=` in a script, is passed over.
 func queryStart(raw string) int {
 	best := len(raw)
 	for _, name := range sasParameters {
-		for i := strings.Index(raw, name+"="); i >= 0 && i < best; i = strings.Index(raw[i+1:], name+"=") + i + 1 {
-			if i == 0 || strings.IndexByte("&?=", raw[i-1]) >= 0 {
-				best = i
+		needle := name + "="
+		for at := strings.Index(raw, needle); at >= 0 && at < best; {
+			if at == 0 || strings.IndexByte("&?=", raw[at-1]) >= 0 {
+				best = at
 				break
 			}
+			next := strings.Index(raw[at+1:], needle)
+			if next < 0 {
+				break
+			}
+			at += 1 + next
 		}
 	}
 	if best == len(raw) {
