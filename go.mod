@@ -11,7 +11,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sts v1.51.1
 	github.com/aws/smithy-go v1.28.2
 	github.com/creativeprojects/go-selfupdate v1.6.0
-	github.com/giantswarm/selfupdate-cosign v0.2.0
+	github.com/giantswarm/selfupdate-cosign v0.3.1
 	github.com/google/go-github/v92 v92.0.0
 	github.com/sigstore/sigstore-go v1.3.0
 	github.com/spf13/cobra v1.10.2
