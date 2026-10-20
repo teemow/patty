@@ -12,7 +12,7 @@ require (
 	github.com/aws/smithy-go v1.28.5
 	github.com/creativeprojects/go-selfupdate v1.7.0
 	github.com/giantswarm/selfupdate-cosign v0.3.8
-	github.com/google/go-github/v92 v92.0.0
+	github.com/google/go-github/v93 v93.0.0
 	github.com/sigstore/sigstore-go v1.3.0
 	github.com/spf13/cobra v1.10.2
 	go.yaml.in/yaml/v3 v3.0.5
