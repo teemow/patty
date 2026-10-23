@@ -19,8 +19,8 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 - **`Find` never contacts the network.** It reads the bytes it is handed and nothing else. Verification and revocation are separate methods and only run when the operator asks for them (`--verify`, `--revoke`).
 - **No credential value is ever logged, printed or stored.** A finding is named by something that reveals nothing: a key id, a fingerprint, `host/username`, a `client_email/private_key_id`. Material that would make the finding usable (a secret access key, a password, a private key) goes into `Token.Secret`, which is never shown, fingerprinted or written to the JSON. Report output redacts `Token.Value` unless `--show-secrets` is given.
 - **A candidate is a finding only when its shape says so.** Verify a built-in checksum where the format has one (classic GitHub tokens, age identities), parse what can be parsed (keys, certificates, JWTs, kubeconfigs), and require the companion a bare string is useless without (an AWS key id's secret, a Docker Hub token's username, an Azure secret's tenant and client). A shape that any hash could match is not a rule.
-- **No token-shaped string is committed to this repository.** Test tokens are built at runtime: classic GitHub tokens from a random part plus a computed checksum, Slack tokens from their id groups and secret, AWS key ids from a prefix and a base32 body, Anthropic and OpenAI keys from a random body plus their fixed prefix, suffix or marker, Docker configs and pull secrets encoded on the fly, age identities, PGP keys and private keys freshly generated. Build even deliberately broken fixtures at runtime: gitleaks' `generic-api-key` rule trips on a literal after `token:` in a Go test, and CI runs gitleaks on every push.
-- **The docs are part of the change.** The README names no providers on purpose; the detection table is the one canonical list, and the checklist below says which sections a provider owns.
+- **No token-shaped string is committed to this repository.** Test tokens are built at runtime: classic GitHub tokens from a random part plus a computed checksum, Slack tokens from their id groups and secret, AWS key ids from a prefix and a base32 body, Anthropic and OpenAI keys from a random body plus their fixed prefix, suffix or marker, Docker configs and pull secrets encoded on the fly, age identities, PGP keys and private keys freshly generated. Build even deliberately broken fixtures at runtime: gitleaks' `generic-api-key` rule trips on any `token`, `key` or `secret` keyword followed by a literal of ten characters or more, in a Go test as anywhere else, and CI runs gitleaks on every push. Keep the keyword and the value apart (`prefix + "AAAA.oops"`). Spelling `kind: Secret` in a Go test is fine: gitleaks' Secret-manifest rule only matches YAML paths.
+- **The docs are part of the change.** The README and `patty --help` (the command's `Short` and `Long`) name no providers on purpose: one generic sentence, because a list of providers is unreadable at ten and goes stale with the eleventh. The detection table is the one canonical list, and the checklist below says which sections a provider owns.
 
 ## Adding a provider
 
@@ -73,3 +73,33 @@ Add the provider to `peers` in [internal/detect/providers/providers.go](internal
 - [docs/report.md](docs/report.md): a `###` subsection under *What the first line says* (attribution and every `--verify` outcome), one under *Revoking* (the API call, its side effects and the rehearsal, or the owner's manual procedure), a row in *Where credentials live locally*, an entry in *Auditing use* when there is an `AuditNote`, and a `###` under *What leaves your machine* naming every request `--verify` and `--revoke` make.
 - [README.md](README.md): a paragraph under *Setup* only when the provider takes operator configuration. The README names no providers anywhere else.
 - This file, when the provider introduces a new optional interface.
+
+## Releases
+
+Every squash merge to `main` is a release. The auto-release workflow runs git-cliff on each push and tags the next version, and nothing skips non-feature commits: a `refactor:`, `chore:` or `docs:` merge is a patch release just as a `fix:` is, and a `feat:` bumps the minor version. Batch small changes rather than cutting a string of near-identical releases.
+
+The tag appears within a minute of the merge; goreleaser uploads the 26 assets four to six minutes later, and until then the release lists none, which is not a failed run. Each platform has a raw binary (`patty_linux_amd64`) and an archive (`patty_Linux_x86_64.tar.gz`), `patty_checksums.txt` has the SHA-256 of every file, and every file has a keyless cosign `.bundle`.
+
+To prove a release works:
+
+1. Wait for the asset, not the workflow. `curl -sIL -o /dev/null -w '%{http_code}' https://github.com/teemow/patty/releases/download/<tag>/patty_linux_amd64` answers 404 until the upload and 200 after; poll it in a bounded loop and read the workflow's outcome once at the end with `gh run view --json status,conclusion`. `gh run watch` (and to a lesser degree `gh pr checks --watch`) polls the Actions jobs endpoint every few seconds and trips GitHub's secondary rate limit, which then refuses every `gh` call for a while, however many core requests `gh api rate_limit` still shows.
+2. Download the binary and its bundle by direct URL and verify them with the identity `patty self-update` checks:
+
+   ```bash
+   cosign verify-blob --bundle patty_linux_amd64.bundle \
+     --certificate-identity https://github.com/teemow/github-workflows/.github/workflows/release-go.yml@refs/heads/main \
+     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+     patty_linux_amd64
+   ```
+
+   Without cosign, check it against `patty_checksums.txt` from the same release: `grep ' patty_linux_amd64$' patty_checksums.txt | sha256sum -c -`.
+3. `chmod +x`, run `version`, then scan a scratch repository. Create it with `GIT_CONFIG_GLOBAL=/dev/null` and explicit `GIT_AUTHOR_*`/`GIT_COMMITTER_*` variables, so that a global git configuration (commit signing, hooks) cannot get in the way of a throwaway commit.
+
+## When a scan hangs
+
+The report is written after the last repository, so a run that stops making progress loses everything it found unless it finishes. Do not send `SIGQUIT` for a goroutine dump: it ends the process and its results with it. Attaching a debugger is often not possible either (Yama's `ptrace_scope` refuses an attach without root, and a `go install`ed binary carries no DWARF), so reproduce instead:
+
+- The per-repository status lines on stderr are the only partial record; keep the terminal's scrollback.
+- Without `--keep` a mirror is removed when its repository finishes, so the mirrors still under the cache (`~/.cache/patty/<host>/<owner>/*.git` on Linux) are exactly the repositories in flight.
+- `git cat-file` children blocked writing to their pipe while patty's threads sit at 100% CPU means a detector is spinning on one object.
+- A throwaway `probe/main.go` inside the module that imports `internal/detect/providers` and times `Registry.Find`, `Observe` and `Instances` per blob of the cached mirror, largest blobs first, with a deadline per call and `runtime/pprof` running, names the function within minutes. That is how a loop in the Azure provider's query parsing and a quadratic search on lockfiles were found ([#31](https://github.com/teemow/patty/pull/31)). Delete the probe before committing.
