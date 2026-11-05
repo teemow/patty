@@ -5,7 +5,7 @@ import (
 	"encoding/base64"
 	"strings"
 
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // maxSecretValue caps how much a single Secret value may decode to before
