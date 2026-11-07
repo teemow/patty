@@ -112,8 +112,8 @@ github.com/felixge/httpsnoop v1.1.0 h1:3YtUj32ZZkqZtt3sZZsClsymw/QDuVfpNhoA31zeO
 github.com/felixge/httpsnoop v1.1.0/go.mod h1:Zqxgdd+1Rkcz8euOqdr7lqgCRJztwr5hp9vDSi5UZCE=
 github.com/giantswarm/go-selfupdate v1.7.4 h1:6im5lkjaMaUs1lYrrGtZYPQsNnPtSb/oSdSXQrHERmI=
 github.com/giantswarm/go-selfupdate v1.7.4/go.mod h1:nqRW1Io8Ixo3x8tSnLKkpfenWn2PRf/Zcu548PZp780=
-github.com/giantswarm/selfupdate-cosign v0.3.22 h1:biJWH0IPniFN5bY8me5aDndGp0k4FdUclzGeOEyO5Zg=
-github.com/giantswarm/selfupdate-cosign v0.3.22/go.mod h1:Z1TgQtiGdIk6Nvs+W3vd+Ffqp3tH/nkCWwL94h2h+sk=
+github.com/giantswarm/selfupdate-cosign v0.3.23 h1:VTc/83GvZXXqcFPUizudXtYkVQh7bzsKU7B1QRBRGh0=
+github.com/giantswarm/selfupdate-cosign v0.3.23/go.mod h1:Z1TgQtiGdIk6Nvs+W3vd+Ffqp3tH/nkCWwL94h2h+sk=
 github.com/go-chi/chi/v5 v5.5.0 h1:xdKQ1dJmVJsmgahrXSKhUx8NyVPzpwdlyrrQFpMPJgg=
 github.com/go-chi/chi/v5 v5.5.0/go.mod h1:d1IG7GtKPSjPyBP365PH8sAGVHk3qfB/IhjFNRH1wWM=
 github.com/go-fed/httpsig v1.1.0 h1:9M+hb0jkEICD8/cAiNqEB66R87tTINszBRTjwjQzWcI=
