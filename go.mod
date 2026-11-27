@@ -9,7 +9,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.48.0
 	github.com/aws/aws-sdk-go-v2/service/iam v1.68.0
 	github.com/aws/aws-sdk-go-v2/service/sts v1.53.0
-	github.com/aws/smithy-go v1.28.9
+	github.com/aws/smithy-go v1.28.11
 	github.com/creativeprojects/go-selfupdate v1.7.1
 	github.com/giantswarm/selfupdate-cosign v0.3.29
 	github.com/google/go-github/v93 v93.0.0
