@@ -6,9 +6,9 @@ require (
 	filippo.io/age v1.3.2
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/ProtonMail/go-crypto v1.5.2
-	github.com/aws/aws-sdk-go-v2 v1.48.0
-	github.com/aws/aws-sdk-go-v2/service/iam v1.68.0
-	github.com/aws/aws-sdk-go-v2/service/sts v1.53.0
+	github.com/aws/aws-sdk-go-v2 v1.48.2
+	github.com/aws/aws-sdk-go-v2/service/iam v1.68.2
+	github.com/aws/aws-sdk-go-v2/service/sts v1.53.2
 	github.com/aws/smithy-go v1.28.11
 	github.com/creativeprojects/go-selfupdate v1.7.1
 	github.com/giantswarm/selfupdate-cosign v0.3.29
@@ -26,11 +26,11 @@ require (
 	filippo.io/hpke v0.4.0 // indirect
 	github.com/42wim/httpsig v1.2.4 // indirect
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.12 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.8.12 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/v4a v1.5.12 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.25 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.14.12 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.14 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.8.14 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/v4a v1.5.14 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.27 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.14.14 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cloudflare/circl v1.6.3 // indirect
